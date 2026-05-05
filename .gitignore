@@ -1,0 +1,35 @@
+# --- Secrets / env ---
+.env
+.env.*
+!.env.example
+run_locally.txt
+
+# --- Local databases ---
+qmetrum.db
+qmetrum.db-journal
+*.db-shm
+*.db-wal
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# --- Node ---
+node_modules/
+.next/
+out/
+*.log
+.npm/
+.pnpm-store/
+
+# --- IDE / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp

@@ -1,0 +1,45 @@
+# docker-compose.yml (in the project root)
+
+version: '3.8'
+
+services:
+
+  # 1. The Brain: Python Forecasting Service (FastAPI)
+  forecasting_service_py:
+    build: ./services/forecasting_service_py
+    container_name: forecasting_service_py
+    ports:
+      - "8000:8000"  # Expose API to host (optional, for debugging)
+    environment:
+      - RISK_SERVICE_URL=http://risk_service_r:8001  # Internal URL to R service
+      - QUANTUM_SERVICE_URL=http://localhost:8001    # (If you have a separate quantum service later)
+    depends_on:
+      - risk_service_r
+    networks:
+      - qmetrum_net
+
+  # 2. The Shield: R Risk Service (Plumber)
+  risk_service_r:
+    build: ./services/risk_service_r
+    container_name: risk_service_r
+    ports:
+      - "8001:8001"
+    networks:
+      - qmetrum_net
+
+  # 3. The Face: Next.js Frontend
+  frontend_nextjs:
+    build: ./services/frontend_nextjs
+    container_name: frontend_nextjs
+    ports:
+      - "3000:3000"  # Access dashboard at http://localhost:3000
+    environment:
+      - FORECAST_API_URL=http://forecasting_service_py:8000
+    depends_on:
+      - forecasting_service_py
+    networks:
+      - qmetrum_net
+
+networks:
+  qmetrum_net:
+    driver: bridge

@@ -1,0 +1,16 @@
+{
+  "_comment": "Per-asset-class regime thresholds. high = vol_21d/vol_126d ratio above which we tag High_Vol; low = ratio below which we tag Low_Vol. Defaults below are reasonable starting values; refresh with scripts/calibrate_regime_thresholds.py against real history.",
+  "_calibrated_at": null,
+  "_source": "default-seed",
+  "classes": {
+    "equity_us": { "high": 1.55, "low": 0.70 },
+    "equity_intl": { "high": 1.55, "low": 0.70 },
+    "etf_broad": { "high": 1.45, "low": 0.75 },
+    "etf_sector": { "high": 1.65, "low": 0.70 },
+    "bond_treasury": { "high": 1.70, "low": 0.60 },
+    "bond_credit": { "high": 1.60, "low": 0.65 },
+    "crypto": { "high": 1.40, "low": 0.65 },
+    "commodity": { "high": 1.55, "low": 0.70 },
+    "default": { "high": 1.50, "low": 0.80 }
+  }
+}
