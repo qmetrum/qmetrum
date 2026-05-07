@@ -1,8 +1,9 @@
-# Qmetrum
+# Qsight
 
 > A risk-intelligence and AI-advisor workstation for independent financial advisors and small wealth-management firms.
+> Built by **Qmetrum**.
 
-Qmetrum lets a financial advisor manage client portfolios, run quantitative
+Qsight lets a financial advisor manage client portfolios, run quantitative
 forecasts and stress scenarios, monitor alerts, and generate advisor-facing
 narratives — all backed by a hybrid classical / quantum / AI engine.
 

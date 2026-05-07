@@ -1,0 +1,33 @@
+# Don't bake secrets / local DB / dev artifacts into the image.
+.env
+.env.*
+!.env.example
+qmetrum.db
+qmetrum.db-journal
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Git metadata (the runtime doesn't need it)
+.git/
+.gitignore
+
+# Built artifacts / large dirs that shouldn't be in the runtime image
+archive/
+docs/
+tests/
+*.log

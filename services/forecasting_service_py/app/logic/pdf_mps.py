@@ -16,7 +16,7 @@ For 1D PDFs at N ≤ ~25 qubits (which is the regime where the paper's KS
 statistical tests *pass on real IBM hardware*) the explicit-vector approach
 is fine: 2^25 ≈ 33 M doubles = ~250 MB. Larger N needs TCI — out of scope.
 
-The multivariate case (joint distributions over many assets) is qmetrum's
+The multivariate case (joint distributions over many assets) is the platform's
 existing `tensor_network_risk` module, which is bounded by N ≤ 8 because it
 materialises the d^N density. Lifting that ceiling needs proper multivariate
 TCI; the paper's results are univariate and they flag multivariate as open.

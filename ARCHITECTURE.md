@@ -1,4 +1,6 @@
-# Qmetrum Architecture
+# Qsight Architecture
+
+> Qsight is the product. Qmetrum is the company.
 
 This document describes how the running system is structured. For a higher-
 level "what is this product" overview see [`README.md`](./README.md).

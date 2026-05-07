@@ -3,8 +3,8 @@ import os
 
 # DATABASE_URL examples:
 #   sqlite:///./qmetrum.db                                      (local dev, default)
-#   postgresql+psycopg2://user:pass@host:5432/qmetrum            (RDS / Aurora / any Postgres)
-#   postgresql+psycopg2://user:pass@host:5432/qmetrum?sslmode=require  (RDS prod)
+#   postgresql+psycopg2://user:pass@host:5432/qsight             (RDS / Aurora / any Postgres)
+#   postgresql+psycopg2://user:pass@host:5432/qsight?sslmode=require  (RDS prod)
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./qmetrum.db")
 
 engine_kwargs: dict = {"echo": False}

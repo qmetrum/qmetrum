@@ -1,0 +1,80 @@
+name: Deploy backend
+
+# Triggered on:
+#   - any push to main/master that touches the backend or this workflow,
+#   - manual dispatch from the Actions tab (handy for redeploying without a code change).
+on:
+  push:
+    branches: [main, master]
+    paths:
+      - 'services/forecasting_service_py/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch:
+
+# OIDC needs id-token: write. We don't push to the repo from the workflow,
+# so contents: read is enough.
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}        # e.g. qmetrum-backend
+  APP_RUNNER_SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+
+jobs:
+  deploy:
+    name: Build → ECR → App Runner
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push image
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPO: ${{ env.ECR_REPOSITORY }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          SHORT_SHA="${GIT_SHA::7}"
+          IMAGE_SHA="$REGISTRY/$REPO:$SHORT_SHA"
+          IMAGE_LATEST="$REGISTRY/$REPO:latest"
+          echo "Building $IMAGE_SHA"
+          docker buildx build \
+            --platform linux/amd64 \
+            --tag "$IMAGE_SHA" \
+            --tag "$IMAGE_LATEST" \
+            --push \
+            services/forecasting_service_py
+          echo "image=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Trigger App Runner deployment
+        if: env.APP_RUNNER_SERVICE_ARN != ''
+        run: |
+          echo "Starting App Runner deployment for $APP_RUNNER_SERVICE_ARN"
+          aws apprunner start-deployment --service-arn "$APP_RUNNER_SERVICE_ARN"
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Deploy summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Image: \`${{ steps.build.outputs.image }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- App Runner service: \`${{ env.APP_RUNNER_SERVICE_ARN }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Region: \`${{ env.AWS_REGION }}\`" >> "$GITHUB_STEP_SUMMARY"

@@ -66,7 +66,7 @@ from app.auth import CognitoAuthMiddleware, auth_router
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Forecastium AI Engine")
+app = FastAPI(title="Qsight API")
 # Cognito auth: validates Bearer tokens and rewrites X-User-Id from claims.
 # No-op when COGNITO_USER_POOL_ID is not set (local dev). Mount before any
 # router so it runs on every request.
@@ -339,7 +339,18 @@ class SavedScreenRequest(BaseModel):
 
 @app.get("/")
 def health_check():
-    return {"status": "active", "module": "Forecastium AI"}
+    return {"status": "active", "module": "Qsight API"}
+
+
+@app.get("/healthz")
+def healthz():
+    """Liveness probe. Cheap by design — returns 200 if the process is alive.
+
+    Use this for App Runner / load-balancer health checks. For deeper
+    runtime/dependency checks (ML runtime, risk service ping, etc.) hit
+    /health or /health/ready.
+    """
+    return {"status": "ok"}
 
 
 @app.get("/health")
