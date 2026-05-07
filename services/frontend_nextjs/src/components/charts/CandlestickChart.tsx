@@ -1,0 +1,123 @@
+"use client";
+
+import { useEffect, useMemo, useRef } from "react";
+import {
+  createChart,
+  CandlestickSeries,
+  type IChartApi,
+  type ISeriesApi,
+  type Time,
+} from "lightweight-charts";
+import { buildOhlc, type AggregationPeriod } from "@/lib/candlesticks";
+
+type Props = {
+  historyPrices: number[];
+  historyDates: string[];
+  forecastPrices?: number[];
+  forecastDates?: string[];
+  period?: AggregationPeriod;
+  height?: number;
+};
+
+export function CandlestickChart({
+  historyPrices,
+  historyDates,
+  forecastPrices = [],
+  forecastDates = [],
+  period = "weekly",
+  height = 320,
+}: Props) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const histSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const fcSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+
+  const bars = useMemo(
+    () => buildOhlc(historyPrices, historyDates, forecastPrices, forecastDates, period),
+    [historyPrices, historyDates, forecastPrices, forecastDates, period],
+  );
+
+  // Init chart once
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const chart = createChart(container, {
+      width: container.clientWidth,
+      height,
+      layout: {
+        background: { color: "transparent" },
+        textColor: "#5A6270",
+        fontSize: 11,
+      },
+      grid: {
+        vertLines: { color: "#EEF0F3" },
+        horzLines: { color: "#EEF0F3" },
+      },
+      rightPriceScale: { borderColor: "#E2E6EB" },
+      timeScale: { borderColor: "#E2E6EB" },
+      crosshair: { mode: 1 },
+    });
+
+    chartRef.current = chart;
+    histSeriesRef.current = chart.addSeries(CandlestickSeries, {
+      upColor: "#0F8B6E",
+      downColor: "#D85A30",
+      wickUpColor: "#0F8B6E",
+      wickDownColor: "#D85A30",
+      borderVisible: false,
+    });
+    fcSeriesRef.current = chart.addSeries(CandlestickSeries, {
+      upColor: "#8FC4B5",
+      downColor: "#E8A58F",
+      wickUpColor: "#8FC4B5",
+      wickDownColor: "#E8A58F",
+      borderVisible: false,
+    });
+
+    const onResize = () => {
+      if (chartRef.current && containerRef.current) {
+        chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+      }
+    };
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+      chart.remove();
+      chartRef.current = null;
+      histSeriesRef.current = null;
+      fcSeriesRef.current = null;
+    };
+  }, [height]);
+
+  // Update data whenever bars change
+  useEffect(() => {
+    if (!chartRef.current || !histSeriesRef.current || !fcSeriesRef.current) return;
+
+    const toChartBar = (b: { time: string; open: number; high: number; low: number; close: number }) => ({
+      time: b.time as unknown as Time,
+      open: b.open,
+      high: b.high,
+      low: b.low,
+      close: b.close,
+    });
+
+    histSeriesRef.current.setData(bars.filter((b) => !b.isForecast).map(toChartBar));
+    fcSeriesRef.current.setData(bars.filter((b) => b.isForecast).map(toChartBar));
+    chartRef.current.timeScale().fitContent();
+  }, [bars]);
+
+  if (bars.length === 0) {
+    return (
+      <div
+        className="flex items-center justify-center text-sm text-[var(--text-muted)]"
+        style={{ height }}
+      >
+        No data available
+      </div>
+    );
+  }
+
+  return <div ref={containerRef} style={{ height, width: "100%" }} />;
+}

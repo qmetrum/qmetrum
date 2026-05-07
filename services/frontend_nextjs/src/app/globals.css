@@ -1,0 +1,192 @@
+@import "tailwindcss";
+
+:root {
+  /* ── Brand palette ── */
+  --navy: #0B1D3A;
+  --navy-dark: #071428;
+  --navy-light: #132D54;
+  --slate: #2D3E50;
+  --teal: #0F8B6E;
+  --teal-light: #E6F5F0;
+  --teal-muted: #0A6B54;
+  --coral: #D85A30;
+  --coral-light: #FDECEC;
+  --amber: #D4920B;
+  --amber-light: #FDF5E6;
+  --blue: #2B7ACC;
+  --blue-light: #EAF2FB;
+
+  /* ── Advisor workstation ── */
+  --sidebar-bg: #0B1D3A;
+  --sidebar-hover: #132D54;
+  --sidebar-active: #1A3A6A;
+  --sidebar-text: #8BA3BF;
+  --sidebar-text-active: #FFFFFF;
+  --sidebar-border: #1E3A5F;
+
+  --content-bg: #F7F8FA;
+  --card-bg: #FFFFFF;
+  --card-border: #E2E6EB;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+
+  --text-primary: #1A1A2E;
+  --text-secondary: #5A6270;
+  --text-muted: #8B95A2;
+  --border: #DDE1E6;
+
+  --positive: #0F8B6E;
+  --negative: #D85A30;
+  --caution: #D4920B;
+  --info: #2B7ACC;
+
+  /* ── Regime colors ── */
+  --regime-normal: #0F8B6E;
+  --regime-high-fragility: #D85A30;
+  --regime-low-vol: #2B7ACC;
+}
+
+/* ── Dark theme overrides ── */
+html.dark {
+  --sidebar-bg: #0A0F1A;
+  --sidebar-hover: #141C2E;
+  --sidebar-active: #1A2740;
+  --sidebar-text: #7A8DA6;
+  --sidebar-text-active: #FFFFFF;
+  --sidebar-border: #1A2438;
+
+  --content-bg: #0E1320;
+  --card-bg: #151C2B;
+  --card-border: #1E2A3E;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+
+  --text-primary: #E4E8EE;
+  --text-secondary: #8B95A8;
+  --text-muted: #5C6778;
+  --border: #1E2A3E;
+
+  --positive: #10B981;
+  --negative: #EF5350;
+  --caution: #F59E0B;
+  --info: #3B82F6;
+}
+
+html.dark body {
+  color: var(--text-primary);
+  background-color: var(--content-bg);
+}
+
+html.dark .q-card {
+  background: var(--card-bg);
+  border-color: var(--card-border);
+}
+
+html.dark * {
+  scrollbar-color: #2A3548 transparent;
+}
+html.dark *::-webkit-scrollbar-thumb { background: #2A3548; }
+
+html.dark .ag-theme-advisor {
+  --ag-background-color: #151C2B;
+  --ag-foreground-color: #E4E8EE;
+  --ag-border-color: #1E2A3E;
+  --ag-row-border-color: #1A2438;
+  --ag-header-background-color: #0E1320;
+  --ag-header-foreground-color: #8B95A8;
+  --ag-odd-row-background-color: #151C2B;
+  --ag-row-hover-color: rgba(16, 185, 129, 0.08);
+  --ag-selected-row-background-color: rgba(16, 185, 129, 0.12);
+  border-color: var(--card-border);
+}
+html.dark .ag-theme-advisor .ag-header-cell,
+html.dark .ag-theme-advisor .ag-header-group-cell {
+  color: #8B95A8;
+}
+
+/* Dark theme: recharts tooltips & inputs */
+html.dark .recharts-default-tooltip {
+  background-color: #1A2438 !important;
+  border-color: #2A3548 !important;
+  color: #E4E8EE !important;
+}
+html.dark input, html.dark select, html.dark textarea {
+  background-color: #1A2438;
+  border-color: #2A3548;
+  color: #E4E8EE;
+}
+html.dark input::placeholder, html.dark textarea::placeholder {
+  color: #5C6778;
+}
+html.dark table thead tr {
+  background-color: var(--content-bg);
+}
+html.dark header {
+  background-color: var(--card-bg) !important;
+  border-color: var(--card-border) !important;
+}
+
+html, body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--text-primary);
+  background-color: var(--content-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: #C4CAD0 transparent;
+}
+*::-webkit-scrollbar { width: 7px; height: 7px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #C4CAD0; border-radius: 999px; }
+
+/* ── Reusable card ── */
+.q-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  box-shadow: var(--card-shadow);
+}
+
+/* ── Metric colors ── */
+.metric-positive { color: var(--positive); }
+.metric-negative { color: var(--negative); }
+.metric-caution  { color: var(--caution); }
+
+/* ── Regime badges ── */
+.regime-normal        { background: #E6F5F0; color: #0A6B54; }
+.regime-high-fragility { background: #FDECEC; color: #B03A1A; }
+.regime-low-vol       { background: #EAF2FB; color: #1D5EA0; }
+
+/* ── ag-grid advisor theme ── */
+.ag-theme-advisor {
+  --ag-background-color: #FFFFFF;
+  --ag-foreground-color: #1A1A2E;
+  --ag-border-color: #E2E6EB;
+  --ag-row-border-color: #EEF0F3;
+  --ag-header-background-color: #F7F8FA;
+  --ag-header-foreground-color: #5A6270;
+  --ag-odd-row-background-color: #FFFFFF;
+  --ag-row-hover-color: rgba(15, 139, 110, 0.06);
+  --ag-selected-row-background-color: rgba(15, 139, 110, 0.10);
+  --ag-font-size: 13px;
+  --ag-font-family: Inter, "Segoe UI", sans-serif;
+  --ag-cell-horizontal-padding: 12px;
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.ag-theme-advisor .ag-header-cell,
+.ag-theme-advisor .ag-header-group-cell {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #5A6270;
+}
