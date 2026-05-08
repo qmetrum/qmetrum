@@ -19,12 +19,13 @@ permissions:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}        # e.g. qmetrum-backend
-  APP_RUNNER_SERVICE_ARN: ${{ secrets.APP_RUNNER_SERVICE_ARN }}
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}        # e.g. qsight-backend
+  ECS_CLUSTER: ${{ secrets.ECS_CLUSTER }}              # e.g. qsight-cluster
+  ECS_SERVICE: ${{ secrets.ECS_SERVICE }}              # e.g. qsight-backend
 
 jobs:
   deploy:
-    name: Build → ECR → App Runner
+    name: Build → ECR → ECS
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -64,11 +65,20 @@ jobs:
             services/forecasting_service_py
           echo "image=$IMAGE_SHA" >> "$GITHUB_OUTPUT"
 
-      - name: Trigger App Runner deployment
-        if: env.APP_RUNNER_SERVICE_ARN != ''
+      - name: Trigger ECS deployment
+        if: env.ECS_CLUSTER != '' && env.ECS_SERVICE != ''
         run: |
-          echo "Starting App Runner deployment for $APP_RUNNER_SERVICE_ARN"
-          aws apprunner start-deployment --service-arn "$APP_RUNNER_SERVICE_ARN"
+          echo "Forcing new ECS deployment: cluster=$ECS_CLUSTER service=$ECS_SERVICE"
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --force-new-deployment \
+            --no-cli-pager \
+            > /dev/null
+          echo "Waiting for service to stabilize…"
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
 
       - name: Summary
         if: always()
@@ -76,5 +86,6 @@ jobs:
           echo "## Deploy summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Image: \`${{ steps.build.outputs.image }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- App Runner service: \`${{ env.APP_RUNNER_SERVICE_ARN }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ECS cluster: \`${{ env.ECS_CLUSTER }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ECS service: \`${{ env.ECS_SERVICE }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- Region: \`${{ env.AWS_REGION }}\`" >> "$GITHUB_STEP_SUMMARY"
