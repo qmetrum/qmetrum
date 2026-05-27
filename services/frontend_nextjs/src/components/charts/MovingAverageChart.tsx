@@ -87,6 +87,7 @@ export function MovingAverageChart({
         <Tooltip
           contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
           labelFormatter={(v) => new Date(v as string).toLocaleDateString()}
+          // @ts-expect-error recharts Formatter typing quirk (matches existing pattern)
           formatter={(value: number | null, name: string) => {
             if (value == null) return [null, null];
             const labels: Record<string, string> = {

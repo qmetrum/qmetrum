@@ -104,14 +104,16 @@ export function ForecastChart({
         <Tooltip
           contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
           labelFormatter={(v) => new Date(v as string).toLocaleDateString()}
-          formatter={(value: number, name: string) => {
+          formatter={(value, name) => {
             const labels: Record<string, string> = {
               history: "Historical",
               forecast: "Forecast",
               upper: "95% Upper",
               lower: "95% Lower",
             };
-            return [value?.toFixed(2), labels[name] ?? name];
+            const key = String(name ?? "");
+            const formatted = typeof value === "number" ? value.toFixed(2) : String(value ?? "");
+            return [formatted, labels[key] ?? key];
           }}
         />
 
