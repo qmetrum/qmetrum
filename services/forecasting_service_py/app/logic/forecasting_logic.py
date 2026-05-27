@@ -413,7 +413,7 @@ class HybridForecaster:
         else:
             df['returns'] = df['price'].pct_change()
             df['volatility'] = df['returns'].rolling(window=21).std() * np.sqrt(252)
-            df['volatility'] = df['volatility'].fillna(method='bfill') # Fill initial NaNs
+            df['volatility'] = df['volatility'].bfill() # Fill initial NaNs (pandas 2.x: fillna(method='bfill') removed)
 
         # --- 1. SYNTHETIC HIGH / LOW (The "Smart" Way) ---
         # Daily Volatility = Annual Vol / sqrt(252)
