@@ -21,8 +21,10 @@ flowchart TB
         pool["User Pool<br/>+ Hosted UI<br/>+ Google / Microsoft IdP"]
     end
 
-    subgraph Backend["Backend (AWS App Runner)"]
-        api["FastAPI app"]
+    alb["ALB<br/>qsight-alb<br/>(HTTP:80)"]
+
+    subgraph Backend["Backend (AWS ECS Fargate, eu-north-1)"]
+        api["FastAPI app<br/>(task: qsight-backend)"]
         middleware["Cognito JWT middleware"]
         workers["Forecast workers<br/>+ alert evaluator<br/>(in-process)"]
     end
@@ -40,7 +42,8 @@ flowchart TB
     browser -->|"HTTPS"| next
     browser -.->|"Sign-in redirect"| pool
     pool -.->|"Token redirect"| next
-    next -->|"Bearer JWT"| api
+    next -->|"Bearer JWT"| alb
+    alb --> api
     api --> middleware
     middleware -.->|"JWKS"| pool
     api --> db
@@ -219,7 +222,7 @@ Current architecture is a deliberate monolith (one FastAPI service + one Postgre
 Future splits we'd consider, in order of likelihood:
 
 1. **Forecast workers as a separate service** — long-running forecast jobs are CPU-heavy and currently run in-process via a thread pool. Moving them to a separate worker pool (still same code, just different deployment) is a low-friction win when traffic warrants it.
-2. **Background alert evaluator as a separate scheduled job** — currently runs in-process every 5 min. Could become an EventBridge-triggered Lambda or App Runner scheduled task.
+2. **Background alert evaluator as a separate scheduled job** — currently runs in-process every 5 min. Could become an EventBridge-triggered Lambda or ECS Scheduled Task.
 3. **Calibration as a scheduled job** — `scripts/calibrate_regime_thresholds.py` should run monthly via Cloud Scheduler / EventBridge instead of being run by hand.
 
 We'd avoid splitting along feature axes (e.g. a separate "agents service", a separate "quantum service") — these would share too much state with the core to pay for themselves.
@@ -275,6 +278,6 @@ All runtime config is environment-driven:
 
 - **Backend**: `services/forecasting_service_py/.env.example` documents every required env var (DB URL, Cognito, Gemini, vendor keys).
 - **Frontend**: `services/frontend_nextjs/.env.local.example` for `NEXT_PUBLIC_*` build-time vars.
-- **Production**: env vars come from AWS Secrets Manager / SSM Parameter Store, injected by App Runner / Amplify at deploy time.
+- **Production**: backend env vars come from AWS SSM Parameter Store under `/qsight/prod/*`, injected into the ECS task definition at deploy time. Frontend `NEXT_PUBLIC_*` vars are baked in at Amplify build time.
 
 Per-asset-class regime thresholds are stored in the `regimethreshold` DB table (was originally a JSON file, kept as a one-time seed in `app/data/regime_thresholds.json`). The calibration script does INSERT-then-deactivate-prior to preserve history.
