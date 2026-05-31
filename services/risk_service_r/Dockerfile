@@ -9,11 +9,14 @@ FROM rstudio/plumber:latest
 RUN apt-get update -qq && apt-get install -y \
     gfortran \
     build-essential \
+    cmake \
+    pkg-config \
     libblas-dev \
     liblapack-dev \
     libglpk-dev \
     libgmp3-dev \
     libxml2-dev \
+    libuv1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ----------------------------------------------------------------
@@ -35,6 +38,11 @@ COPY app/ /app/
 # ----------------------------------------------------------------
 # Expose Port 8001 (Must match your docker-compose.yml)
 EXPOSE 8001
+
+# Override the base image's ENTRYPOINT — rstudio/plumber's entrypoint script
+# wraps CMD as an api.R file path, which collides with our direct R invocation
+# (the entire R command string ends up being treated as a filename and fails).
+ENTRYPOINT []
 
 # Start the Plumber API
 # We allow connections from 0.0.0.0 (any source) so Docker networking works
