@@ -63,7 +63,47 @@ class PortfolioManager:
         return data_map, fundamentals_map
 
     def _run_single_forecast(self, ticker, df, horizon, fundamentals):
-        """Helper to run one forecast instance."""
+        """Helper to run one forecast instance.
+
+        Tries `ForecastCache` first — Phase 4 of the nightly batch already
+        trains and caches per-asset forecasts, so re-running HybridForecaster
+        here was the dominant cost of analyze_portfolio (turned a 30-min run
+        into a 2.5-hour run for amarkou's 4-portfolio test). Falls back to
+        an inline train only on a cache miss.
+        """
+        # Cache lookup. Cheap: indexed query keyed on (ticker, horizon, data_last_date)
+        # — the same composite key nightly_batch writes against.
+        try:
+            from app.db.database import engine
+            from app.db.models import ForecastCache
+            from sqlmodel import Session, select
+
+            last_ts = df.index[-1] if len(df) else None
+            if last_ts is not None:
+                data_last_date = (
+                    last_ts.to_pydatetime() if hasattr(last_ts, "to_pydatetime")
+                    else pd.to_datetime(last_ts).to_pydatetime()
+                )
+                with Session(engine) as session:
+                    cached = session.exec(
+                        select(ForecastCache)
+                        .where(ForecastCache.ticker == ticker)
+                        .where(ForecastCache.horizon_days == horizon)
+                        .where(ForecastCache.data_last_date == data_last_date)
+                        .order_by(ForecastCache.run_date.desc())
+                    ).first()
+                    if cached and cached.forecast_blob:
+                        logger.info(
+                            f"PortfolioManager._run_single_forecast: ForecastCache hit for "
+                            f"{ticker} (h={horizon}, data_last_date={data_last_date.date()}); skipping retrain"
+                        )
+                        return ticker, dict(cached.forecast_blob)
+        except Exception as cache_err:
+            logger.warning(
+                f"PortfolioManager._run_single_forecast: cache lookup for {ticker} failed "
+                f"({cache_err}); falling through to inline train"
+            )
+
         try:
             forecaster = HybridForecaster()
             forecaster.fundamentals = fundamentals or {}
