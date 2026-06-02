@@ -134,6 +134,15 @@ class YearEndReportRequest(BaseModel):
 # ────────────────────────────────────────────────────────────
 
 def _resolve_user(user_id: Optional[int], x_user_id: Optional[int]) -> int:
+    # Production (Cognito configured): only trust the X-User-Id header set by
+    # CognitoAuthMiddleware from a verified JWT claim. Refuse query-param and
+    # DEFAULT_USER_ID fallbacks — they're impersonation vectors.
+    from app.auth.cognito import is_cognito_configured
+    from fastapi import HTTPException
+    if is_cognito_configured():
+        if x_user_id is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return int(x_user_id)
     if user_id is not None:
         return int(user_id)
     if x_user_id is not None:

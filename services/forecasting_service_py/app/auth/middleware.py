@@ -5,12 +5,13 @@ For every incoming request:
   Cognito JWKS, resolve the local `User`, and rewrite `X-User-Id` on the
   request scope so existing handlers' `Header(alias="X-User-Id")` params
   pick up the authenticated user id automatically.
-- If no Bearer token, the request passes through unchanged. Any existing
-  `X-User-Id` legacy header is honored as before.
+- If no Bearer token, the request passes through with any client-supplied
+  `X-User-Id` stripped (so it cannot be spoofed). Handlers see `None`.
 - If a Bearer token is present but invalid, return 401.
 
 The middleware is a no-op when Cognito is not configured (e.g. local dev
-without Cognito env vars) — it simply does not touch incoming requests.
+without Cognito env vars) — it simply does not touch incoming requests,
+so the legacy `X-User-Id` flow keeps working for `python main.py` + curl.
 """
 from __future__ import annotations
 
@@ -44,9 +45,14 @@ class CognitoAuthMiddleware(BaseHTTPMiddleware):
         if not is_cognito_configured():
             return await call_next(request)
 
+        # Strip any client-supplied X-User-Id immediately. Anything below
+        # that re-injects it must do so from a verified Cognito claim.
+        _strip_header(request, "x-user-id")
+
         auth_header = request.headers.get("authorization")
         if not auth_header or not auth_header.lower().startswith("bearer "):
-            # No Bearer token: legacy path. Pass through.
+            # No Bearer token: handlers will see x_user_id=None and decide
+            # whether to 401 (via `_require_user`) or serve a public response.
             return await call_next(request)
 
         token = auth_header[7:].strip()
@@ -89,4 +95,11 @@ def _set_header(request: Request, name: str, value: str) -> None:
     value_b = value.encode("latin-1")
     headers = [(k, v) for (k, v) in request.scope.get("headers", []) if k.lower() != name_b]
     headers.append((name_b, value_b))
+    request.scope["headers"] = headers
+
+
+def _strip_header(request: Request, name: str) -> None:
+    """Remove a header from the live request scope (if present)."""
+    name_b = name.lower().encode("latin-1")
+    headers = [(k, v) for (k, v) in request.scope.get("headers", []) if k.lower() != name_b]
     request.scope["headers"] = headers

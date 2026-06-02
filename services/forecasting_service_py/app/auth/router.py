@@ -28,10 +28,16 @@ def me(
 ):
     """Return the currently-authenticated user.
 
-    The middleware has already validated the Cognito token and set
-    `X-User-Id` on the request scope; this endpoint just looks up the row.
+    In production the middleware has already validated the Cognito token and
+    set `X-User-Id` on the request scope; we trust only that header. The
+    `user_id` query param is a local-dev convenience honored only when
+    Cognito isn't configured.
     """
-    uid = user_id if user_id is not None else x_user_id
+    from app.auth.cognito import is_cognito_configured
+    if is_cognito_configured():
+        uid = x_user_id
+    else:
+        uid = user_id if user_id is not None else x_user_id
     if uid is None:
         raise HTTPException(status_code=401, detail="Not authenticated")
 

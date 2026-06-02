@@ -61,6 +61,7 @@ from app.vendors import get_vendor
 from app.reports.report_router import report_router
 from app.agents.agents_router import agents_router
 from app.auth import CognitoAuthMiddleware, auth_router
+from app.auth.cognito import is_cognito_configured
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -402,6 +403,17 @@ def _ensure_default_user() -> None:
 
 
 def _resolve_user_id(user_id: Optional[int], x_user_id: Optional[int]) -> int:
+    # In production (Cognito configured), the only trusted source of identity
+    # is the X-User-Id header that CognitoAuthMiddleware injected from a
+    # verified JWT claim. The ?user_id= query param and DEFAULT_USER_ID
+    # fallback are legacy diagnostic paths that would let anyone impersonate
+    # any user, so we refuse them and 401 instead.
+    if is_cognito_configured():
+        if x_user_id is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return int(x_user_id)
+    # Local dev (no Cognito env vars): keep the legacy resolution order so
+    # `python main.py` + curl with X-User-Id, ?user_id=, or no creds still works.
     if user_id is not None:
         return int(user_id)
     if x_user_id is not None:

@@ -24,14 +24,19 @@ agents_router = APIRouter()
 
 def _require_user_like(session: Session, user_id: Optional[int], x_user_id: Optional[int]):
     # Thin shim that mirrors main._require_user without importing main (avoid
-    # circular imports). We look up a user by id; any authenticated user will
-    # do, so we pick the first with a matching id. If neither header nor param
-    # is supplied we take user_id=1 (matches existing frontend default).
+    # circular imports). In production (Cognito configured) we accept only the
+    # X-User-Id that CognitoAuthMiddleware injected from a verified JWT claim.
+    from app.auth.cognito import is_cognito_configured
     from app.db.models import User
 
-    uid = user_id if user_id is not None else x_user_id
-    if uid is None:
-        uid = 1
+    if is_cognito_configured():
+        if x_user_id is None:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        uid = int(x_user_id)
+    else:
+        uid = user_id if user_id is not None else x_user_id
+        if uid is None:
+            uid = 1
     user = session.exec(select(User).where(User.id == uid)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
