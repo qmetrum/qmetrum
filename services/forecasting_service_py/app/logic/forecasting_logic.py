@@ -1391,6 +1391,72 @@ class HybridForecaster:
             y.append(endog[t])
         return np.stack(X), np.array(y)
 
+    def _apply_explosion_sanity_gate(self, forecast_prices, upper_ci, lower_ci, horizon_days, sigma_mult=10.0):
+        """Detect numerically explosive forecasts and substitute a geometric fallback.
+
+        Any model in the ensemble can produce divergent output on certain return-series
+        shapes — Portfolio 3 (ETF Core) hit ARIMA non-stationary divergence with
+        max forecast = 1.19e189, which the UI rendered as flat zero and all derived
+        metrics collapsed to 0. The same can happen at the per-asset level. If the
+        forecast leaves a `sigma_mult`-σ envelope around the last historical price,
+        replace it with a geometric extrapolation at historical drift so downstream
+        consumers always receive finite, plot-able values.
+
+        Returns: (forecast_prices, upper_ci, lower_ci, meta_or_None). meta carries
+        model_used / forecast_quality / forecast_quality_reason overrides for the
+        response dict; None means no explosion was detected and inputs are unchanged.
+        """
+        fp = list(forecast_prices or [])
+        if not fp:
+            return forecast_prices, upper_ci, lower_ci, None
+
+        try:
+            hist_prices = self.trained_history_df["price"].astype(float).values
+        except Exception:
+            return forecast_prices, upper_ci, lower_ci, None
+        if len(hist_prices) <= 1:
+            return forecast_prices, upper_ci, lower_ci, None
+
+        last_hist = float(hist_prices[-1])
+        hist_std = float(pd.Series(hist_prices).std()) or 1.0
+        upper_bound = last_hist + sigma_mult * hist_std
+        lower_bound = max(0.01, last_hist - sigma_mult * hist_std)
+        fp_finite = [p for p in fp if isinstance(p, (int, float)) and np.isfinite(p)]
+        exploded = (
+            len(fp_finite) != len(fp)
+            or any(p > upper_bound or p < lower_bound for p in fp_finite)
+        )
+        if not exploded:
+            return forecast_prices, upper_ci, lower_ci, None
+
+        fp_max = max(fp_finite) if fp_finite else float("nan")
+        prev_model = self.winner_model_name or "unknown"
+        logger.warning(
+            f"HybridForecaster sanity gate: '{prev_model}' forecast exploded "
+            f"(max={fp_max:.3e}, last_hist={last_hist:.2f}, "
+            f"{sigma_mult:.0f}sigma_upper={upper_bound:.2f}); substituting geometric extrapolation"
+        )
+        first_hist = float(hist_prices[0])
+        n_hist = len(hist_prices)
+        daily_drift = (
+            (last_hist / first_hist) ** (1.0 / max(1, n_hist - 1)) - 1.0
+            if first_hist > 0 else 0.0
+        )
+        h = int(horizon_days)
+        fallback_prices = [last_hist * (1.0 + daily_drift) ** i for i in range(1, h + 1)]
+        fallback_upper = [p * 1.1 for p in fallback_prices]
+        fallback_lower = [p * 0.9 for p in fallback_prices]
+        meta = {
+            "model_used": f"{prev_model}_fallback_geom",
+            "forecast_quality": "fallback_post_explosion",
+            "forecast_quality_reason": (
+                f"original {prev_model} forecast exceeded {sigma_mult:.0f}sigma envelope "
+                f"(max={fp_max:.3e}, bound={upper_bound:.2f}); replaced with geometric "
+                f"extrapolation at historical drift {daily_drift:.6f}/day"
+            ),
+        }
+        return fallback_prices, fallback_upper, fallback_lower, meta
+
     # ----------------------------------------------------------------
     # PREDICT (With KPI Calculation)
     # ----------------------------------------------------------------
@@ -1506,9 +1572,18 @@ class HybridForecaster:
 
         deterministic_forecast_prices = list(forecast_prices)
 
+        # Sanity-gate the model output before any downstream layers consume it.
+        # If the gate fires, we replace forecast/upper/lower with a geometric
+        # fallback and skip realism (which would just compound the bad path).
+        forecast_prices, upper_ci, lower_ci, _fallback_meta = self._apply_explosion_sanity_gate(
+            forecast_prices, upper_ci, lower_ci, forecast_horizon_days
+        )
+        if _fallback_meta is not None:
+            deterministic_forecast_prices = list(forecast_prices)
+
         # Optional realism layer: stochastic representative path around model mean.
         effective_seed = None
-        if realism_mode and len(forecast_prices) > 0:
+        if realism_mode and len(forecast_prices) > 0 and _fallback_meta is None:
             effective_seed = self._default_stochastic_seed(forecast_horizon_days) if stochastic_seed is None else int(stochastic_seed)
             rep_prices, rep_lo, rep_hi = self._build_stochastic_representative_path(
                 deterministic_prices=forecast_prices,
@@ -1689,6 +1764,10 @@ class HybridForecaster:
         if deterministic_forecast_prices:
             response["forecast_prices_mean"] = deterministic_forecast_prices
         response["realism_mode"] = bool(realism_mode)
+        if _fallback_meta is not None:
+            response["model_used"] = _fallback_meta["model_used"]
+            response["forecast_quality"] = _fallback_meta["forecast_quality"]
+            response["forecast_quality_reason"] = _fallback_meta["forecast_quality_reason"]
         if effective_seed is not None:
             response["stochastic_seed"] = int(effective_seed)
         if self.validation_scores:

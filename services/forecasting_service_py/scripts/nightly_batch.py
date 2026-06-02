@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import math
 import sys
 import time
 import traceback
@@ -539,56 +538,10 @@ def precompute_portfolio_forecasts(
             forecaster.train(hist_df)
             forecast_result = forecaster.predict(forecast_horizon_days=horizon_days)
 
-            # Sanity-gate the forecast. Any model in the ensemble can produce numerically
-            # explosive output on certain return-series shapes (Portfolio 3 ETF Core hit
-            # ARIMA non-stationary divergence: max forecast = 1.19e189, last = 0 → UI
-            # rendered as flat zero, all derived metrics collapsed to 0). If the forecast
-            # leaves a 10σ envelope of last historical price, drop it and substitute a
-            # geometric extrapolation of the historical drift so the UI always gets
-            # finite, plot-able values. Tagged so we can see when it triggers in prod.
-            try:
-                fp = list(forecast_result.get("forecast_prices") or [])
-                hist_prices = hist_df["price"].astype(float).values
-                if fp and len(hist_prices) > 1:
-                    last_hist = float(hist_prices[-1])
-                    hist_std = float(pd.Series(hist_prices).std()) or 1.0
-                    upper = last_hist + 10.0 * hist_std
-                    lower = max(0.01, last_hist - 10.0 * hist_std)
-                    fp_finite = [p for p in fp if isinstance(p, (int, float)) and math.isfinite(p)]
-                    exploded = (
-                        len(fp_finite) != len(fp)
-                        or any(p > upper or p < lower for p in fp_finite)
-                    )
-                    if exploded:
-                        prev_model = forecast_result.get("model_used", "unknown")
-                        fp_max = max(fp_finite) if fp_finite else float("nan")
-                        logger.warning(
-                            f"    Portfolio {pid}: '{prev_model}' forecast exploded "
-                            f"(max={fp_max:.3e}, last_hist={last_hist:.2f}, "
-                            f"10sigma_upper={upper:.2f}); substituting geometric extrapolation"
-                        )
-                        first_hist = float(hist_prices[0])
-                        n_hist = len(hist_prices)
-                        daily_drift = (
-                            (last_hist / first_hist) ** (1.0 / max(1, n_hist - 1)) - 1.0
-                            if first_hist > 0 else 0.0
-                        )
-                        h = int(horizon_days)
-                        fallback_prices = [last_hist * (1.0 + daily_drift) ** i for i in range(1, h + 1)]
-                        forecast_result["forecast_prices"] = fallback_prices
-                        forecast_result["forecast_prices_mean"] = list(fallback_prices)
-                        forecast_result["upper_ci"] = [p * 1.1 for p in fallback_prices]
-                        forecast_result["lower_ci"] = [p * 0.9 for p in fallback_prices]
-                        forecast_result["model_used"] = f"{prev_model}_fallback_geom"
-                        forecast_result["forecast_quality"] = "fallback_post_explosion"
-                        forecast_result["forecast_quality_reason"] = (
-                            f"original {prev_model} forecast exceeded 10sigma envelope "
-                            f"(max={fp_max:.3e}, bound={upper:.2f}); replaced with geometric "
-                            f"extrapolation at historical drift {daily_drift:.6f}/day"
-                        )
-            except Exception as e:
-                # Never let the sanity gate itself break Phase 5 — log and continue.
-                logger.warning(f"    Portfolio {pid}: forecast sanity check failed: {e}")
+            # Sanity gate lives inside HybridForecaster.predict() now, so the
+            # explosion-detection + geometric fallback already ran above. The
+            # response carries `forecast_quality = "fallback_post_explosion"`
+            # when it fires.
 
             # Run risk
             step = "risk_service"
