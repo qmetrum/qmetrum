@@ -241,6 +241,7 @@ class Position(SQLModel, table=True):
     weight: float = Field(default=0.0)
     quantity: float = Field(default=0.0)
     cost_basis: float = Field(default=0.0)
+    purchase_date: Optional[datetime] = Field(default=None)
     asset_type: str = Field(default="EQUITY")
 
     portfolio: Optional[Portfolio] = Relationship(back_populates="positions")
