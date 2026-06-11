@@ -2502,24 +2502,90 @@ def _parse_portfolio_id(portfolio_id: str) -> int:
         raise HTTPException(status_code=400, detail="portfolio_id must be an integer")
 
 
-def _portfolio_to_dict(portfolio: Portfolio, positions: List[Position]) -> dict:
-    return {
+def _latest_two_closes(session: Session, tickers: List[str]) -> Dict[str, tuple]:
+    """Return `{ticker: (latest_close, prev_close)}`. Either entry may be None
+    if MarketData has insufficient rows for that ticker. Used to derive
+    current_value / unrealized_pnl / daily_pnl for opt-in cost-basis positions."""
+    out: Dict[str, tuple] = {}
+    for ticker in tickers:
+        rows = session.exec(
+            select(MarketData.close)
+            .where(MarketData.symbol == ticker)
+            .order_by(MarketData.date.desc())
+            .limit(2)
+        ).all()
+        latest = float(rows[0]) if len(rows) >= 1 else None
+        prev = float(rows[1]) if len(rows) >= 2 else None
+        out[ticker] = (latest, prev)
+    return out
+
+
+def _portfolio_to_dict(
+    portfolio: Portfolio,
+    positions: List[Position],
+    session: Optional[Session] = None,
+) -> dict:
+    # Opt-in $ tracking: positions where the user has supplied cost_basis (and
+    # quantity) get current_value / unrealized_pnl / daily_pnl. Weight-only
+    # positions keep their existing shape, untouched.
+    priced_tickers = [p.ticker for p in positions if p.cost_basis > 0 and p.quantity > 0]
+    closes: Dict[str, tuple] = (
+        _latest_two_closes(session, priced_tickers)
+        if priced_tickers and session is not None
+        else {}
+    )
+
+    assets: List[dict] = []
+    total_cost_basis = 0.0
+    total_current_value = 0.0
+    total_daily_pnl = 0.0
+    any_value_computed = False
+
+    for p in positions:
+        asset = {
+            "ticker": p.ticker,
+            "weight": p.weight,
+            "quantity": p.quantity,
+            "cost_basis": p.cost_basis,
+            "asset_type": p.asset_type,
+            "purchase_date": p.purchase_date.isoformat() if p.purchase_date else None,
+        }
+        if p.cost_basis > 0 and p.quantity > 0:
+            latest, prev = closes.get(p.ticker, (None, None))
+            if latest is not None:
+                current_value = p.quantity * latest
+                pnl = current_value - p.cost_basis
+                asset["current_price"] = latest
+                asset["current_value"] = current_value
+                asset["unrealized_pnl"] = pnl
+                asset["unrealized_pnl_pct"] = (pnl / p.cost_basis) if p.cost_basis else 0.0
+                if prev is not None:
+                    asset["daily_pnl"] = p.quantity * (latest - prev)
+                    total_daily_pnl += asset["daily_pnl"]
+                total_cost_basis += p.cost_basis
+                total_current_value += current_value
+                any_value_computed = True
+        assets.append(asset)
+
+    result = {
         "portfolio_id": portfolio.id,
         "user_id": portfolio.user_id,
         "name": portfolio.name,
-        "assets": [
-            {
-                "ticker": p.ticker,
-                "weight": p.weight,
-                "quantity": p.quantity,
-                "cost_basis": p.cost_basis,
-                "asset_type": p.asset_type
-            }
-            for p in positions
-        ],
+        "assets": assets,
         "created_at": portfolio.created_at.isoformat(),
-        "updated_at": portfolio.updated_at.isoformat()
+        "updated_at": portfolio.updated_at.isoformat(),
+        "has_cost_basis_data": any(p.cost_basis > 0 for p in positions),
     }
+    if any_value_computed:
+        total_pnl = total_current_value - total_cost_basis
+        result["totals"] = {
+            "cost_basis": total_cost_basis,
+            "current_value": total_current_value,
+            "unrealized_pnl": total_pnl,
+            "unrealized_pnl_pct": (total_pnl / total_cost_basis) if total_cost_basis else 0.0,
+            "daily_pnl": total_daily_pnl,
+        }
+    return result
 
 def _normalize_assets(assets: Optional[List[dict]]) -> List[dict]:
     if not assets:
@@ -2603,7 +2669,7 @@ def list_portfolios(
             positions = session.exec(
                 select(Position).where(Position.portfolio_id == p.id)
             ).all()
-            result.append(_portfolio_to_dict(p, positions))
+            result.append(_portfolio_to_dict(p, positions, session=session))
         return {"items": result}
 
 
@@ -2645,7 +2711,7 @@ def create_portfolio(
         positions = session.exec(
             select(Position).where(Position.portfolio_id == portfolio.id)
         ).all()
-        return _portfolio_to_dict(portfolio, positions)
+        return _portfolio_to_dict(portfolio, positions, session=session)
 
 
 @app.get("/portfolios/{portfolio_id}")
@@ -2668,7 +2734,7 @@ def get_portfolio(
         positions = session.exec(
             select(Position).where(Position.portfolio_id == pid)
         ).all()
-        return _portfolio_to_dict(portfolio, positions)
+        return _portfolio_to_dict(portfolio, positions, session=session)
 
 
 @app.put("/portfolios/{portfolio_id}")
@@ -2726,7 +2792,7 @@ def upsert_portfolio(
         positions = session.exec(
             select(Position).where(Position.portfolio_id == pid)
         ).all()
-        return _portfolio_to_dict(portfolio, positions)
+        return _portfolio_to_dict(portfolio, positions, session=session)
 
 
 @app.delete("/portfolios/{portfolio_id}")
