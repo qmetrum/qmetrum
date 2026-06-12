@@ -223,11 +223,26 @@ export type PortfolioHolding = {
   quantity?: number;
   cost_basis?: number;
   asset_type?: string;
+  purchase_date?: string | null;
+  // Derived $ metrics — present only when cost_basis > 0, quantity > 0, and MarketData exists.
+  current_price?: number;
+  current_value?: number;
+  unrealized_pnl?: number;
+  unrealized_pnl_pct?: number;
+  daily_pnl?: number;
 };
 
 export type PortfolioUpsertPayload = {
   name?: string;
   assets: PortfolioHolding[];
+};
+
+export type PortfolioTotals = {
+  cost_basis: number;
+  current_value: number;
+  unrealized_pnl: number;
+  unrealized_pnl_pct: number;
+  daily_pnl: number;
 };
 
 export type PortfolioResponse = {
@@ -237,6 +252,10 @@ export type PortfolioResponse = {
   assets: PortfolioHolding[];
   created_at?: string;
   updated_at?: string;
+  // Opt-in $ tracking: true when at least one position has cost_basis > 0.
+  has_cost_basis_data?: boolean;
+  // Portfolio-level rollups — present only when ≥1 position has derived $ metrics.
+  totals?: PortfolioTotals;
 };
 
 export type PortfolioForecastResponse = {
