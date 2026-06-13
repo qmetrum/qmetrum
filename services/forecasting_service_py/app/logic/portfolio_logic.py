@@ -382,6 +382,10 @@ class PortfolioManager:
                 "upper_1s": np.percentile(paths, 84,   axis=1).tolist(),
                 "lower_2s": np.percentile(paths, 2.5,  axis=1).tolist(),
                 "upper_2s": np.percentile(paths, 97.5, axis=1).tolist(),
+                # 5th/95th percentile bands so the fan emits a per-horizon VaR 95
+                # directly: p5 here is the price level whose shortfall is the VaR.
+                "p5":       np.percentile(paths, 5,    axis=1).tolist(),
+                "p95":      np.percentile(paths, 95,   axis=1).tolist(),
             }
 
         scenarios_fan = {}
