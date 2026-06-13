@@ -393,6 +393,42 @@ export type VarBacktestResponse = {
   cache?: { hit?: boolean; cache_type?: string; method?: string };
 };
 
+export type VarBacktestMethodResult = {
+  key: string;
+  label: string;
+  method: string;
+  physical_dim: number | null;
+  status: "ok" | "skipped";
+  reason?: string;
+  n_observations?: number;
+  exceptions?: number;
+  expected_exceptions?: number;
+  breach_rate?: number;
+  expected_breach_rate?: number;
+  kupiec?: { p_value: number; reject: boolean };
+  christoffersen_cc?: { p_value: number; reject: boolean };
+  independence?: { p_value: number; reject: boolean };
+  basel_zone?: "green" | "yellow" | "red";
+  observed_expected_shortfall?: number | null;
+  model_passes?: boolean;
+  var_threshold?: number[];
+};
+
+export type VarBacktestCompareResponse = {
+  portfolio_id?: number;
+  confidence: number;
+  alpha: number;
+  horizon_days: number;
+  overlapping_windows: boolean;
+  n_observations: number;
+  shared: { dates: string[]; realized_return: number[] };
+  methods: VarBacktestMethodResult[];
+  recommended: { key: string; label: string; why: string } | null;
+  params?: Record<string, unknown>;
+  data_window?: { start: string; end: string; n_return_obs: number };
+  cache?: { hit?: boolean };
+};
+
 export type WatchlistResponse = {
   watchlist_id: number;
   user_id?: number;
@@ -560,7 +596,7 @@ export const portfolioApi = {
   varBacktest: async (
     id: string | number,
     payload: {
-      method?: "mps_fan" | "historical";
+      method?: "mps_fan" | "historical" | "parametric";
       confidence?: number;
       horizon_days?: number;
       est_window?: number;
@@ -570,6 +606,19 @@ export const portfolioApi = {
     } = {},
   ) =>
     (await api.post<VarBacktestResponse>(`/portfolios/${id}/var_backtest`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
+
+  varBacktestCompare: async (
+    id: string | number,
+    payload: {
+      confidence?: number;
+      horizon_days?: number;
+      est_window?: number;
+      n_backtest?: number;
+      n_simulations?: number;
+      random_seed?: number;
+    } = {},
+  ) =>
+    (await api.post<VarBacktestCompareResponse>(`/portfolios/${id}/var_backtest_compare`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
 };
 
 export const forecastJobApi = {

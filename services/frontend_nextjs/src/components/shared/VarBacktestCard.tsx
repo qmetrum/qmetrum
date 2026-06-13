@@ -14,21 +14,33 @@ import {
   ReferenceLine,
   Legend,
 } from "recharts";
-import { portfolioApi, type VarBacktestResponse } from "@/lib/api";
+import {
+  portfolioApi,
+  type VarBacktestResponse,
+  type VarBacktestCompareResponse,
+  type VarBacktestMethodResult,
+} from "@/lib/api";
 
 type Props = { portfolioId: string | number };
-type Method = "historical" | "mps_fan";
+type View = "historical" | "mps_fan" | "compare";
 
-const METHOD_LABEL: Record<Method, string> = {
+const VIEW_LABEL: Record<View, string> = {
   historical: "Historical",
   mps_fan: "MPS fan",
+  compare: "Compare",
 };
 
-// historical is instant; mps_fan refits the copula each day, so trim the
-// window from the 250 default to keep the round-trip ~15s.
-const METHOD_PAYLOAD: Record<Method, Parameters<typeof portfolioApi.varBacktest>[1]> = {
+// historical is instant; mps_fan refits the copula each day, so trim the window.
+const SINGLE_PAYLOAD: Record<"historical" | "mps_fan", Parameters<typeof portfolioApi.varBacktest>[1]> = {
   historical: { method: "historical" },
   mps_fan: { method: "mps_fan", n_backtest: 120, n_simulations: 400 },
+};
+
+const METHOD_COLOR: Record<string, string> = {
+  historical: "#0F8B6E",
+  parametric: "#3B6FB5",
+  mps_d4: "#D85A30",
+  mps_d8: "#D4920B",
 };
 
 function Pill({ ok, label }: { ok: boolean; label: string }) {
@@ -70,83 +82,242 @@ function Tile({ label, value, sub, warn }: { label: string; value: string; sub?:
   );
 }
 
-function pct(x: number, digits = 2) {
-  return `${(x * 100).toFixed(digits)}%`;
+function pct(x: number | null | undefined, digits = 2) {
+  return x == null ? "—" : `${(x * 100).toFixed(digits)}%`;
 }
 
-function BacktestChart({ data }: { data: VarBacktestResponse }) {
+function spinner(msg: string) {
+  return (
+    <div className="flex h-[300px] flex-col items-center justify-center gap-2 text-sm text-[var(--text-muted)]">
+      <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--card-border)] border-t-[var(--teal)]" />
+      {msg}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+// Single-method chart: realized vs VaR threshold + breach markers
+// --------------------------------------------------------------------------- //
+function SingleChart({ data }: { data: VarBacktestResponse }) {
   const dates = data.series.date;
   const rows = data.series.realized_return.map((r, i) => {
     const realized = +(r * 100).toFixed(3);
-    const breach = data.series.breach[i];
     return {
       label: dates?.[i] ?? String(i),
       realized,
       var: +(data.series.var_threshold[i] * 100).toFixed(3),
-      breachVal: breach ? realized : null, // Scatter skips null points
+      breachVal: data.series.breach[i] ? realized : null,
     };
   });
   if (rows.length === 0) {
     return <div className="flex h-[240px] items-center justify-center text-sm text-[var(--text-muted)]">No data</div>;
   }
   const tickEvery = Math.max(1, Math.floor(rows.length / 6));
-
   return (
     <ResponsiveContainer width="100%" height={240}>
       <ComposedChart data={rows} margin={{ top: 8, right: 10, left: 6, bottom: 4 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
-        <XAxis
-          dataKey="label"
-          tick={{ fontSize: 9, fill: "#8B95A2" }}
-          interval={tickEvery}
-          tickFormatter={(v: string) => (v.length >= 7 ? v.slice(0, 7) : v)}
-        />
+        <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#8B95A2" }} interval={tickEvery}
+          tickFormatter={(v: string) => (v.length >= 7 ? v.slice(0, 7) : v)} />
         <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v}%`} width={44} />
-        <Tooltip
-          contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
+        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
           // @ts-expect-error recharts Formatter typing quirk (matches ReturnsChart pattern)
-          formatter={(value: number, name: string) => [`${Number(value ?? 0).toFixed(2)}%`, name]}
-        />
+          formatter={(value: number, name: string) => [`${Number(value ?? 0).toFixed(2)}%`, name]} />
         <Legend wrapperStyle={{ fontSize: 11 }} iconType="plainline" />
         <ReferenceLine y={0} stroke="#8B95A2" strokeWidth={1} />
-        <Line
-          type="monotone"
-          dataKey="var"
-          name="VaR 95 threshold"
-          stroke="#D85A30"
-          strokeWidth={1.5}
-          strokeDasharray="4 3"
-          dot={false}
-          isAnimationActive={false}
-        />
-        <Line
-          type="monotone"
-          dataKey="realized"
-          name="Realized return"
-          stroke="#3B6FB5"
-          strokeWidth={1}
-          dot={false}
-          isAnimationActive={false}
-        />
+        <Line type="monotone" dataKey="var" name="VaR 95 threshold" stroke="#D85A30" strokeWidth={1.5}
+          strokeDasharray="4 3" dot={false} isAnimationActive={false} />
+        <Line type="monotone" dataKey="realized" name="Realized return" stroke="#3B6FB5" strokeWidth={1}
+          dot={false} isAnimationActive={false} />
         <Scatter dataKey="breachVal" name="Breach" fill="#D85A30" isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
   );
 }
 
-export function VarBacktestCard({ portfolioId }: Props) {
-  const [method, setMethod] = useState<Method>("historical");
+function SingleView({ data, method }: { data: VarBacktestResponse; method: "historical" | "mps_fan" }) {
+  return (
+    <>
+      <div className="flex flex-wrap gap-2">
+        <Pill ok={!data.kupiec.reject} label="Kupiec POF" />
+        <Pill ok={!data.christoffersen.conditional_coverage.reject} label="Christoffersen CC" />
+        <Pill ok={!data.christoffersen.independence.reject} label="Independence" />
+        <ZonePill zone={data.basel_traffic_light.zone} />
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Tile label="Exceptions" value={`${data.exceptions} / ${data.expected_exceptions}`}
+          sub={`over ${data.n_observations} days`} warn={data.exceptions > data.expected_exceptions} />
+        <Tile label="Breach rate" value={pct(data.breach_rate)} sub={`target ${pct(data.expected_breach_rate, 1)}`}
+          warn={data.breach_rate > data.expected_breach_rate * 1.5} />
+        <Tile label="Kupiec p-value" value={data.kupiec.p_value.toFixed(3)}
+          sub={data.kupiec.reject ? `reject @ α=${data.alpha}` : "not rejected"} warn={data.kupiec.reject} />
+        <Tile label="Expected shortfall"
+          value={data.observed_expected_shortfall == null ? "—" : pct(data.observed_expected_shortfall)}
+          sub="avg breach-day loss" />
+      </div>
+      <SingleChart data={data} />
+      <div className="space-y-1 text-[11px] text-[var(--text-muted)]">
+        <p>
+          {VIEW_LABEL[method]} method · {Math.round(data.confidence * 100)}% confidence · {data.horizon_days}-day horizon
+          {data.data_window ? ` · ${data.data_window.start} → ${data.data_window.end}` : ""}
+          {data.cache?.hit ? " · cached" : ""}
+        </p>
+        {data.overlapping_windows && (
+          <p className="text-[var(--amber)]">⚠ Horizon &gt; 1 uses overlapping windows; coverage tests assume independence.</p>
+        )}
+        <p>Position weights are applied across the whole window (no historical weight versioning).</p>
+      </div>
+    </>
+  );
+}
 
-  const { data, isLoading, isError, error } = useQuery({
-    queryKey: ["portfolio-var-backtest", portfolioId, method],
-    queryFn: () => portfolioApi.varBacktest(portfolioId, METHOD_PAYLOAD[method]),
+// --------------------------------------------------------------------------- //
+// Compare view: table + recommendation + multi-method VaR overlay
+// --------------------------------------------------------------------------- //
+function CompareChart({ data }: { data: VarBacktestCompareResponse }) {
+  const ok = data.methods.filter((m) => m.status === "ok" && m.var_threshold);
+  const dates = data.shared.dates;
+  const rows = data.shared.realized_return.map((r, i) => {
+    const row: Record<string, number | string | null> = {
+      label: dates[i] ?? String(i),
+      realized: +(r * 100).toFixed(3),
+    };
+    for (const m of ok) row[m.key] = +((m.var_threshold![i] ?? 0) * 100).toFixed(3);
+    return row;
+  });
+  if (rows.length === 0) return null;
+  const tickEvery = Math.max(1, Math.floor(rows.length / 6));
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <ComposedChart data={rows} margin={{ top: 8, right: 10, left: 6, bottom: 4 }}>
+        <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
+        <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#8B95A2" }} interval={tickEvery}
+          tickFormatter={(v: string) => (v.length >= 7 ? v.slice(0, 7) : v)} />
+        <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v}%`} width={44} />
+        <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
+          // @ts-expect-error recharts Formatter typing quirk (matches ReturnsChart pattern)
+          formatter={(value: number, name: string) => [`${Number(value ?? 0).toFixed(2)}%`, name]} />
+        <Legend wrapperStyle={{ fontSize: 10 }} iconType="plainline" />
+        <ReferenceLine y={0} stroke="#8B95A2" strokeWidth={1} />
+        <Line type="monotone" dataKey="realized" name="Realized" stroke="#1A2B45" strokeWidth={1} dot={false} isAnimationActive={false} />
+        {ok.map((m) => (
+          <Line key={m.key} type="monotone" dataKey={m.key} name={m.label}
+            stroke={METHOD_COLOR[m.key] ?? "#8B95A2"} strokeWidth={1.25} strokeDasharray="4 3"
+            dot={false} isAnimationActive={false} />
+        ))}
+      </ComposedChart>
+    </ResponsiveContainer>
+  );
+}
+
+function Verdict({ m }: { m: VarBacktestMethodResult }) {
+  if (m.status === "skipped")
+    return <span className="text-[var(--text-muted)]">skipped</span>;
+  return (
+    <span className={`font-semibold ${m.model_passes ? "text-[var(--teal-muted)]" : "text-[var(--coral)]"}`}>
+      {m.model_passes ? "PASS" : "FAIL"}
+    </span>
+  );
+}
+
+function CompareView({ data }: { data: VarBacktestCompareResponse }) {
+  const recKey = data.recommended?.key;
+  return (
+    <>
+      {data.recommended ? (
+        <div className="rounded-lg bg-[var(--teal-light)] px-4 py-3 text-sm text-[var(--teal-muted)]">
+          ✓ Recommended: <span className="font-semibold">{data.recommended.label}</span> — {data.recommended.why}
+        </div>
+      ) : (
+        <div className="rounded-lg bg-[var(--coral-light)] px-4 py-3 text-sm text-[var(--coral)]">
+          ⚠ No method passed VaR 95 coverage on this window.
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+              <th className="py-2 pr-3">Method</th>
+              <th className="py-2 px-3">Breaches</th>
+              <th className="py-2 px-3">Breach rate</th>
+              <th className="py-2 px-3">Kupiec p</th>
+              <th className="py-2 px-3">Christoffersen p</th>
+              <th className="py-2 px-3">Basel</th>
+              <th className="py-2 pl-3">Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.methods.map((m) => {
+              const rec = m.key === recKey;
+              if (m.status === "skipped") {
+                return (
+                  <tr key={m.key} className="border-t border-[var(--card-border)] text-[var(--text-muted)]">
+                    <td className="py-2 pr-3 font-medium">{m.label}</td>
+                    <td className="py-2 px-3 italic" colSpan={6}>skipped — {m.reason}</td>
+                  </tr>
+                );
+              }
+              return (
+                <tr key={m.key}
+                  className={`border-t border-[var(--card-border)] ${rec ? "bg-[var(--teal-light)]/40" : ""}`}>
+                  <td className="py-2 pr-3 font-medium text-[var(--navy)]">
+                    {rec && <span className="mr-1 text-[var(--teal)]">★</span>}{m.label}
+                  </td>
+                  <td className="py-2 px-3">{m.exceptions} / {m.expected_exceptions}</td>
+                  <td className={`py-2 px-3 ${(m.breach_rate ?? 0) > (m.expected_breach_rate ?? 0.05) * 1.5 ? "text-[var(--coral)]" : ""}`}>
+                    {pct(m.breach_rate)}
+                  </td>
+                  <td className={`py-2 px-3 ${m.kupiec?.reject ? "text-[var(--coral)]" : ""}`}>{m.kupiec?.p_value.toFixed(3)}</td>
+                  <td className={`py-2 px-3 ${m.christoffersen_cc?.reject ? "text-[var(--coral)]" : ""}`}>{m.christoffersen_cc?.p_value.toFixed(3)}</td>
+                  <td className="py-2 px-3 capitalize">{m.basel_zone}</td>
+                  <td className="py-2 pl-3"><Verdict m={m} /></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <CompareChart data={data} />
+
+      <div className="space-y-1 text-[11px] text-[var(--text-muted)]">
+        <p>
+          {Math.round(data.confidence * 100)}% confidence · {data.horizon_days}-day horizon · {data.n_observations} obs
+          {data.data_window ? ` · ${data.data_window.start} → ${data.data_window.end}` : ""}
+          {data.cache?.hit ? " · cached" : ""}
+        </p>
+        <p>All methods scored on the identical date sample. The MPS d-sweep shows whether finer return binning corrects the anti-conservative d=4 tails.</p>
+      </div>
+    </>
+  );
+}
+
+// --------------------------------------------------------------------------- //
+export function VarBacktestCard({ portfolioId }: Props) {
+  const [view, setView] = useState<View>("historical");
+
+  const single = useQuery({
+    queryKey: ["portfolio-var-backtest", portfolioId, view],
+    queryFn: () => portfolioApi.varBacktest(portfolioId, SINGLE_PAYLOAD[view as "historical" | "mps_fan"]),
+    enabled: view !== "compare",
     staleTime: 1000 * 60 * 30,
     retry: false,
   });
 
+  const compare = useQuery({
+    queryKey: ["portfolio-var-backtest-compare", portfolioId],
+    queryFn: () => portfolioApi.varBacktestCompare(portfolioId),
+    enabled: view === "compare",
+    staleTime: 1000 * 60 * 30,
+    retry: false,
+  });
+
+  const active = view === "compare" ? compare : single;
+  const passes = view !== "compare" ? (single.data as VarBacktestResponse | undefined)?.model_passes : undefined;
+
   return (
     <div className="q-card p-5 space-y-4">
-      {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-sm font-semibold text-[var(--text-primary)]">VaR 95 Backtest</h2>
@@ -155,103 +326,41 @@ export function VarBacktestCard({ portfolioId }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {data && (
-            <span
-              className={`rounded-full px-3 py-1 text-xs font-bold ${
-                data.model_passes ? "bg-[var(--teal-light)] text-[var(--teal-muted)]" : "bg-[var(--coral-light)] text-[var(--coral)]"
-              }`}
-            >
-              {data.model_passes ? "MODEL PASSES" : "MODEL FAILS"}
+          {view !== "compare" && single.data && (
+            <span className={`rounded-full px-3 py-1 text-xs font-bold ${
+              passes ? "bg-[var(--teal-light)] text-[var(--teal-muted)]" : "bg-[var(--coral-light)] text-[var(--coral)]"
+            }`}>
+              {passes ? "MODEL PASSES" : "MODEL FAILS"}
             </span>
           )}
-          {/* Method toggle */}
           <div className="inline-flex rounded-lg border border-[var(--card-border)] p-0.5">
-            {(Object.keys(METHOD_LABEL) as Method[]).map((m) => (
-              <button
-                key={m}
-                onClick={() => setMethod(m)}
+            {(Object.keys(VIEW_LABEL) as View[]).map((v) => (
+              <button key={v} onClick={() => setView(v)}
                 className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  method === m ? "bg-[var(--navy)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--navy)]"
-                }`}
-              >
-                {METHOD_LABEL[m]}
+                  view === v ? "bg-[var(--navy)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--navy)]"
+                }`}>
+                {VIEW_LABEL[v]}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      {isLoading && (
-        <div className="flex h-[300px] flex-col items-center justify-center gap-2 text-sm text-[var(--text-muted)]">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-[var(--card-border)] border-t-[var(--teal)]" />
-          {method === "mps_fan" ? "Refitting the MPS fan per day — this takes ~15s…" : "Running backtest…"}
-        </div>
-      )}
+      {active.isLoading &&
+        spinner(view === "compare" ? "Comparing methods (MPS sweep refits per day) — ~30s…"
+          : view === "mps_fan" ? "Refitting the MPS fan per day — this takes ~15s…" : "Running backtest…")}
 
-      {isError && !isLoading && (
+      {active.isError && !active.isLoading && (
         <div className="rounded-lg bg-[var(--coral-light)] px-4 py-3 text-sm text-[var(--coral)]">
-          {(error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+          {(active.error as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
             "Backtest unavailable (insufficient price history or too few assets)."}
         </div>
       )}
 
-      {data && !isLoading && (
-        <>
-          {/* Coverage verdict pills */}
-          <div className="flex flex-wrap gap-2">
-            <Pill ok={!data.kupiec.reject} label="Kupiec POF" />
-            <Pill ok={!data.christoffersen.conditional_coverage.reject} label="Christoffersen CC" />
-            <Pill ok={!data.christoffersen.independence.reject} label="Independence" />
-            <ZonePill zone={data.basel_traffic_light.zone} />
-          </div>
-
-          {/* Metric tiles */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Tile
-              label="Exceptions"
-              value={`${data.exceptions} / ${data.expected_exceptions}`}
-              sub={`over ${data.n_observations} days`}
-              warn={data.exceptions > data.expected_exceptions}
-            />
-            <Tile
-              label="Breach rate"
-              value={pct(data.breach_rate)}
-              sub={`target ${pct(data.expected_breach_rate, 1)}`}
-              warn={data.breach_rate > data.expected_breach_rate * 1.5}
-            />
-            <Tile
-              label="Kupiec p-value"
-              value={data.kupiec.p_value.toFixed(3)}
-              sub={data.kupiec.reject ? `reject @ α=${data.alpha}` : "not rejected"}
-              warn={data.kupiec.reject}
-            />
-            <Tile
-              label="Expected shortfall"
-              value={data.observed_expected_shortfall == null ? "—" : pct(data.observed_expected_shortfall)}
-              sub="avg breach-day loss"
-            />
-          </div>
-
-          {/* Realized vs VaR overlay */}
-          <BacktestChart data={data} />
-
-          {/* Footnotes */}
-          <div className="space-y-1 text-[11px] text-[var(--text-muted)]">
-            <p>
-              {METHOD_LABEL[method]} method · {Math.round(data.confidence * 100)}% confidence ·{" "}
-              {data.horizon_days}-day horizon
-              {data.data_window ? ` · ${data.data_window.start} → ${data.data_window.end}` : ""}
-              {data.cache?.hit ? " · cached" : ""}
-            </p>
-            {data.overlapping_windows && (
-              <p className="text-[var(--amber)]">
-                ⚠ Horizon &gt; 1 uses overlapping windows; coverage tests assume independent observations.
-              </p>
-            )}
-            <p>Position weights are applied across the whole window (no historical weight versioning).</p>
-          </div>
-        </>
+      {view !== "compare" && single.data && !single.isLoading && (
+        <SingleView data={single.data} method={view as "historical" | "mps_fan"} />
       )}
+      {view === "compare" && compare.data && !compare.isLoading && <CompareView data={compare.data} />}
     </div>
   );
 }

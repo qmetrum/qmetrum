@@ -115,3 +115,56 @@ def test_no_data_raises(monkeypatch):
     monkeypatch.setattr(runner, "get_price_series_cached", lambda t, period="5y": [])
     with pytest.raises(ValueError, match="no price history"):
         runner.run_portfolio_var_backtest(assets=ASSETS, method="historical")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3: parametric method + multi-method comparison
+# --------------------------------------------------------------------------- #
+def test_parametric_method_runs(patched_prices):
+    res = runner.run_portfolio_var_backtest(
+        assets=ASSETS, method="parametric", n_backtest=200, est_window=252)
+    assert res["method"] == "parametric"
+    assert res["n_observations"] >= 150
+    assert all(v < 0 for v in res["series"]["var_threshold"])
+
+
+def test_comparison_runs_all_methods_on_identical_sample(patched_prices):
+    res = runner.run_portfolio_var_backtest_comparison(
+        assets=ASSETS, n_backtest=30, est_window=120, n_simulations=200)
+    keys = {m["key"] for m in res["methods"]}
+    assert {"historical", "parametric", "mps_d4", "mps_d8"} <= keys
+    ok = [m for m in res["methods"] if m["status"] == "ok"]
+    assert len(ok) == 4  # 4 assets -> d=4 (256) and d=8 (4096) both feasible
+    # Every method scored on the IDENTICAL sample (fair comparison)
+    assert len({m["n_observations"] for m in ok}) == 1
+    assert ok[0]["n_observations"] == len(res["shared"]["realized_return"])
+    assert len(res["shared"]["dates"]) == ok[0]["n_observations"]
+    # each method carries a per-day var_threshold of the right length
+    for m in ok:
+        assert len(m["var_threshold"]) == m["n_observations"]
+        assert all(v < 0 for v in m["var_threshold"])
+    # recommended is either None or one of the passing methods
+    if res["recommended"] is not None:
+        passers = {m["key"] for m in ok if m["model_passes"]}
+        assert res["recommended"]["key"] in passers
+
+
+def test_comparison_skips_infeasible_physical_dim(patched_prices):
+    res = runner.run_portfolio_var_backtest_comparison(
+        assets=ASSETS, n_backtest=30, est_window=120, n_simulations=200,
+        methods=[{"key": "historical", "label": "Historical", "method": "historical"},
+                 {"key": "mps_big", "label": "MPS d=64", "method": "mps_fan", "physical_dim": 64}])
+    by_key = {m["key"]: m for m in res["methods"]}
+    assert by_key["historical"]["status"] == "ok"
+    assert by_key["mps_big"]["status"] == "skipped"
+    assert "exceeds" in by_key["mps_big"]["reason"]
+
+
+def test_comparison_single_asset_skips_mps(patched_prices):
+    res = runner.run_portfolio_var_backtest_comparison(
+        assets=[{"ticker": "AAA", "weight": 1.0}], n_backtest=30, est_window=120)
+    by_key = {m["key"]: m for m in res["methods"]}
+    assert by_key["historical"]["status"] == "ok"
+    assert by_key["parametric"]["status"] == "ok"
+    assert by_key["mps_d4"]["status"] == "skipped"
+    assert "2 assets" in by_key["mps_d4"]["reason"]

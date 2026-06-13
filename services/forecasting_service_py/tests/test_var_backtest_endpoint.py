@@ -141,3 +141,26 @@ def test_insufficient_history_returns_400(client, portfolio_id, monkeypatch):
                  {"method": "historical", "est_window": 252, "n_backtest": 250,
                   "confidence": 0.91})
     assert resp.status_code == 400
+
+
+def test_compare_endpoint(client, portfolio_id):
+    body = {"n_backtest": 30, "est_window": 120, "n_simulations": 200, "confidence": 0.95}
+    r1 = _post_compare(client, portfolio_id, body)
+    assert r1.status_code == 200, r1.text
+    data = r1.json()
+    keys = {m["key"] for m in data["methods"]}
+    assert {"historical", "parametric", "mps_d4", "mps_d8"} <= keys
+    ok = [m for m in data["methods"] if m["status"] == "ok"]
+    assert len({m["n_observations"] for m in ok}) == 1  # identical sample
+    assert len(data["shared"]["realized_return"]) == ok[0]["n_observations"]
+    assert "recommended" in data
+    assert data["cache"]["hit"] is False
+    # cache round-trip
+    r2 = _post_compare(client, portfolio_id, body)
+    assert r2.status_code == 200
+    assert r2.json()["cache"]["hit"] is True
+
+
+def _post_compare(client, pid, body, uid=USER_ID):
+    return client.post(f"/portfolios/{pid}/var_backtest_compare", json=body,
+                       headers={"X-User-Id": str(uid)})

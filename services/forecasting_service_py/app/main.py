@@ -29,7 +29,10 @@ from app.logic.quantum_reservoir import fit_forecast_qrc, auto_tune_qrc, QRCConf
 from app.logic.qrc_cache import retune_and_save as qrc_retune_and_save, list_cached_tickers as qrc_list_cached_tickers, load_cached_config as qrc_load_cached_config
 from app.bench.quantum_bench import run_full_benchmark, list_benchmark_runs, get_benchmark_run
 from app.logic.portfolio_logic import PortfolioManager
-from app.logic.var_backtest_runner import run_portfolio_var_backtest
+from app.logic.var_backtest_runner import (
+    run_portfolio_var_backtest,
+    run_portfolio_var_backtest_comparison,
+)
 # Updated Imports (News + Database)
 from app.utils.data_fetcher import fetch_news
 from app.services.market_store import get_price_series_cached, get_fundamentals_cached
@@ -266,8 +269,18 @@ class VarBacktestRequest(BaseModel):
     horizon_days: int = 1
     est_window: int = 252
     n_backtest: int = 250
-    method: str = "mps_fan"        # "mps_fan" | "historical"
+    method: str = "mps_fan"        # "mps_fan" | "historical" | "parametric"
     n_simulations: int = 500
+    random_seed: Optional[int] = 42
+
+
+class VarBacktestCompareRequest(BaseModel):
+    assets: Optional[List[dict]] = None
+    confidence: float = 0.95
+    horizon_days: int = 1
+    est_window: int = 252
+    n_backtest: int = 120          # lighter default: several methods run per request
+    n_simulations: int = 400
     random_seed: Optional[int] = 42
 
 
@@ -3531,6 +3544,130 @@ def var_backtest_portfolio(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"VaR backtest failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/portfolios/{portfolio_id}/var_backtest_compare")
+def var_backtest_compare_portfolio(
+    portfolio_id: str,
+    payload: VarBacktestCompareRequest,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Compare VaR 95 methods side by side over the SAME backtest window:
+    historical, parametric (normal/vol-based), and an MPS physical-dim sweep
+    (d=4, d=8). Answers "which volatility model passes VaR 95" and shows whether
+    finer MPS binning fixes the anti-conservative d=4 tails. Heavy (refits the
+    MPS fan per day for each d) — cached in RiskSimulationCache.
+    """
+    try:
+        pid = _parse_portfolio_id(portfolio_id)
+        assets = payload.assets or []
+        store_portfolio_runs = True
+        with Session(engine) as session:
+            user = _require_user(session, user_id, x_user_id)
+            portfolio = session.exec(
+                select(Portfolio).where(Portfolio.id == pid).where(Portfolio.user_id == user.id)
+            ).first()
+            if not portfolio:
+                raise HTTPException(status_code=404, detail="Portfolio not found")
+            store_portfolio_runs = _portfolio_storage_enabled_for_user(session, int(user.id))
+            if not assets:
+                positions = session.exec(
+                    select(Position).where(Position.portfolio_id == pid)
+                ).all()
+                assets = [{"ticker": p.ticker, "weight": p.weight} for p in positions]
+
+        assets = _normalize_assets(assets)
+        if not assets:
+            raise HTTPException(status_code=400, detail="assets are required")
+
+        confidence = float(payload.confidence)
+        horizon_days = int(payload.horizon_days)
+        est_window = int(payload.est_window)
+        n_backtest = int(payload.n_backtest)
+        n_simulations = int(payload.n_simulations)
+        random_seed = int(payload.random_seed) if payload.random_seed is not None else None
+        cache_method = "var_backtest_compare"
+
+        with Session(engine) as session:
+            latest_market_dates = _portfolio_latest_market_dates(
+                session, [a["ticker"] for a in assets]
+            )
+        input_hash = _stable_json_hash(
+            {
+                "portfolio_id": pid,
+                "method": cache_method,
+                "assets": assets,
+                "confidence": confidence,
+                "horizon_days": horizon_days,
+                "est_window": est_window,
+                "n_backtest": n_backtest,
+                "n_simulations": n_simulations,
+                "random_seed": random_seed,
+                "latest_market_dates": latest_market_dates,
+            }
+        )
+
+        if store_portfolio_runs:
+            try:
+                with Session(engine) as session:
+                    cached = _get_simulation_cache_result(
+                        session,
+                        entity_type="portfolio",
+                        entity_id=str(pid),
+                        method=cache_method,
+                        input_hash=input_hash,
+                    )
+                if cached:
+                    return cached
+            except Exception as e:
+                logger.warning(f"VaR backtest compare cache read failed: {e}")
+
+        logger.info(f"Computing VaR backtest comparison for portfolio {pid}: {len(assets)} assets")
+        result = run_portfolio_var_backtest_comparison(
+            assets=assets,
+            confidence=confidence,
+            horizon_days=horizon_days,
+            est_window=est_window,
+            n_backtest=n_backtest,
+            n_simulations=n_simulations,
+            random_seed=random_seed,
+        )
+        result = _json_compatible(result)
+        result["portfolio_id"] = pid
+        result["cache"] = {
+            "hit": False,
+            "cache_type": "risk_simulation",
+            "input_hash": input_hash,
+            "method": cache_method,
+            "persisted": bool(store_portfolio_runs),
+        }
+
+        if store_portfolio_runs:
+            try:
+                with Session(engine) as session:
+                    _save_simulation_cache_result(
+                        session,
+                        entity_type="portfolio",
+                        entity_id=str(pid),
+                        method=cache_method,
+                        horizon_days=horizon_days,
+                        n_simulations=n_simulations,
+                        random_seed=random_seed,
+                        input_hash=input_hash,
+                        data_last_date=None,
+                        result_blob=result,
+                    )
+            except Exception as e:
+                logger.warning(f"VaR backtest compare cache write failed: {e}")
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"VaR backtest comparison failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
