@@ -352,6 +352,47 @@ export type PortfolioQuantumRiskResponse = {
   history_summary?: Record<string, unknown>;
 };
 
+type CoverageTest = {
+  test?: string;
+  statistic: number;
+  p_value: number;
+  df: number;
+  reject: boolean;
+};
+
+export type VarBacktestResponse = {
+  portfolio_id?: number;
+  method: string;
+  confidence: number;
+  alpha: number;
+  horizon_days: number;
+  overlapping_windows: boolean;
+  n_observations: number;
+  exceptions: number;
+  expected_exceptions: number;
+  breach_rate: number;
+  expected_breach_rate: number;
+  kupiec: CoverageTest & { observed_rate?: number; expected_rate?: number };
+  christoffersen: {
+    independence: CoverageTest;
+    conditional_coverage: CoverageTest;
+    transitions: { n00: number; n01: number; n10: number; n11: number };
+  };
+  basel_traffic_light: { zone: "green" | "yellow" | "red"; cumulative_probability: number };
+  observed_expected_shortfall: number | null;
+  model_passes: boolean;
+  skipped_days?: number;
+  series: {
+    date: string[] | null;
+    realized_return: number[];
+    var_threshold: number[];
+    breach: boolean[];
+  };
+  params?: Record<string, unknown>;
+  data_window?: { start: string; end: string; n_return_obs: number };
+  cache?: { hit?: boolean; cache_type?: string; method?: string };
+};
+
 export type WatchlistResponse = {
   watchlist_id: number;
   user_id?: number;
@@ -515,6 +556,20 @@ export const portfolioApi = {
     payload: { horizon_days?: number; n_simulations?: number; random_seed?: number } = {},
   ) =>
     (await api.post<PortfolioQuantumRiskResponse>(`/portfolios/${id}/simulate_quantum_risk`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
+
+  varBacktest: async (
+    id: string | number,
+    payload: {
+      method?: "mps_fan" | "historical";
+      confidence?: number;
+      horizon_days?: number;
+      est_window?: number;
+      n_backtest?: number;
+      n_simulations?: number;
+      random_seed?: number;
+    } = {},
+  ) =>
+    (await api.post<VarBacktestResponse>(`/portfolios/${id}/var_backtest`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
 };
 
 export const forecastJobApi = {

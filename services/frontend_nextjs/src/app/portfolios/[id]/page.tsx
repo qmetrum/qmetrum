@@ -14,6 +14,7 @@ import { RegimeBadge } from "@/components/shared/RegimeBadge";
 import { CreateAlertDialog } from "@/components/shared/CreateAlertDialog";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
 import { PortfolioCommentaryCard } from "@/components/shared/PortfolioCommentaryCard";
+import { VarBacktestCard } from "@/components/shared/VarBacktestCard";
 import { ClientQADrawer } from "@/components/shared/ClientQADrawer";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
@@ -844,6 +845,9 @@ export default function PortfolioDetailPage() {
           )}
         </div>
       </div>
+
+      {/* VaR 95 backtest (Kupiec / Christoffersen coverage) */}
+      <VarBacktestCard portfolioId={id} />
 
       <AlertRulesList
         tickers={(portfolio?.assets ?? []).map((a) => a.ticker.toUpperCase())}
