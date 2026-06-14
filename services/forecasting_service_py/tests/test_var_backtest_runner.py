@@ -168,3 +168,60 @@ def test_comparison_single_asset_skips_mps(patched_prices):
     assert by_key["parametric"]["status"] == "ok"
     assert by_key["mps_d4"]["status"] == "skipped"
     assert "2 assets" in by_key["mps_d4"]["reason"]
+
+
+# --------------------------------------------------------------------------- #
+# Drift weight mode (buy-and-hold value weights from shares x price)
+# --------------------------------------------------------------------------- #
+ASSETS_Q = [{"ticker": "AAA", "weight": 0.4, "quantity": 10.0},
+            {"ticker": "BBB", "weight": 0.3, "quantity": 5.0},
+            {"ticker": "CCC", "weight": 0.2, "quantity": 8.0},
+            {"ticker": "DDD", "weight": 0.1, "quantity": 3.0}]
+
+
+def test_effective_weight_mode_logic():
+    assert runner.effective_weight_mode("drift", ASSETS_Q) == "drift"
+    assert runner.effective_weight_mode("drift", ASSETS) == "constant"   # no quantity -> fallback
+    assert runner.effective_weight_mode("constant", ASSETS_Q) == "constant"
+
+
+def test_drift_falls_back_without_quantity(patched_prices):
+    res = runner.run_portfolio_var_backtest(
+        assets=ASSETS, method="historical", n_backtest=100, est_window=252, weight_mode="drift")
+    assert res["weight_mode"] == "constant"
+    assert res["weight_mode_requested"] == "drift"
+    assert "fell back" in res["weight_mode_note"]
+
+
+def test_drift_used_and_differs_from_constant(patched_prices):
+    c = runner.run_portfolio_var_backtest(
+        assets=ASSETS_Q, method="historical", n_backtest=100, est_window=252, weight_mode="constant")
+    d = runner.run_portfolio_var_backtest(
+        assets=ASSETS_Q, method="historical", n_backtest=100, est_window=252, weight_mode="drift")
+    assert c["weight_mode"] == "constant"
+    assert d["weight_mode"] == "drift"
+    assert "buy-and-hold" in d["weight_mode_note"]
+    # drift value-weighting differs from the fixed 0.4/0.3/0.2/0.1 weights
+    assert c["series"]["realized_return"] != d["series"]["realized_return"]
+
+
+def test_drift_purchase_date_gating(patched_prices):
+    # a late purchase_date should exclude that lot early -> still runs cleanly
+    assets = [dict(a) for a in ASSETS_Q]
+    assets[0]["purchase_date"] = "2022-06-01"
+    res = runner.run_portfolio_var_backtest(
+        assets=assets, method="historical", n_backtest=100, est_window=252, weight_mode="drift")
+    assert res["weight_mode"] == "drift"
+    assert res["n_observations"] >= 80
+
+
+def test_drift_mps_and_compare(patched_prices):
+    res = runner.run_portfolio_var_backtest(
+        assets=ASSETS_Q, method="mps_fan", n_backtest=30, est_window=120,
+        n_simulations=200, weight_mode="drift")
+    assert res["weight_mode"] == "drift"
+    assert all(v < 0 for v in res["series"]["var_threshold"])
+    cmp = runner.run_portfolio_var_backtest_comparison(
+        assets=ASSETS_Q, n_backtest=30, est_window=120, n_simulations=200, weight_mode="drift")
+    assert cmp["weight_mode"] == "drift"
+    assert len(cmp["shared"]["realized_return"]) == cmp["n_observations"]

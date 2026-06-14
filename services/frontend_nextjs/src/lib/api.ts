@@ -367,6 +367,9 @@ export type VarBacktestResponse = {
   alpha: number;
   horizon_days: number;
   overlapping_windows: boolean;
+  weight_mode?: "constant" | "drift";
+  weight_mode_requested?: string;
+  weight_mode_note?: string;
   n_observations: number;
   exceptions: number;
   expected_exceptions: number;
@@ -420,6 +423,9 @@ export type VarBacktestCompareResponse = {
   alpha: number;
   horizon_days: number;
   overlapping_windows: boolean;
+  weight_mode?: "constant" | "drift";
+  weight_mode_requested?: string;
+  weight_mode_note?: string;
   n_observations: number;
   shared: { dates: string[]; realized_return: number[] };
   methods: VarBacktestMethodResult[];
@@ -603,6 +609,7 @@ export const portfolioApi = {
       n_backtest?: number;
       n_simulations?: number;
       random_seed?: number;
+      weight_mode?: "constant" | "drift";
     } = {},
   ) =>
     (await api.post<VarBacktestResponse>(`/portfolios/${id}/var_backtest`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
@@ -616,6 +623,7 @@ export const portfolioApi = {
       n_backtest?: number;
       n_simulations?: number;
       random_seed?: number;
+      weight_mode?: "constant" | "drift";
     } = {},
   ) =>
     (await api.post<VarBacktestCompareResponse>(`/portfolios/${id}/var_backtest_compare`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,

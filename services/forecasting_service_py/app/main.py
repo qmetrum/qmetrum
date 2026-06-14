@@ -32,6 +32,7 @@ from app.logic.portfolio_logic import PortfolioManager
 from app.logic.var_backtest_runner import (
     run_portfolio_var_backtest,
     run_portfolio_var_backtest_comparison,
+    effective_weight_mode,
 )
 # Updated Imports (News + Database)
 from app.utils.data_fetcher import fetch_news
@@ -272,6 +273,7 @@ class VarBacktestRequest(BaseModel):
     method: str = "mps_fan"        # "mps_fan" | "historical" | "parametric"
     n_simulations: int = 500
     random_seed: Optional[int] = 42
+    weight_mode: str = "constant"  # "constant" | "drift" (drift needs share quantities)
 
 
 class VarBacktestCompareRequest(BaseModel):
@@ -282,6 +284,7 @@ class VarBacktestCompareRequest(BaseModel):
     n_backtest: int = 120          # lighter default: several methods run per request
     n_simulations: int = 400
     random_seed: Optional[int] = 42
+    weight_mode: str = "constant"  # "constant" | "drift"
 
 
 class QuantumBenchmarkRequest(BaseModel):
@@ -3448,7 +3451,11 @@ def var_backtest_portfolio(
                 positions = session.exec(
                     select(Position).where(Position.portfolio_id == pid)
                 ).all()
-                assets = [{"ticker": p.ticker, "weight": p.weight} for p in positions]
+                assets = [
+                    {"ticker": p.ticker, "weight": p.weight, "quantity": p.quantity,
+                     "purchase_date": p.purchase_date.isoformat() if p.purchase_date else None}
+                    for p in positions
+                ]
 
         assets = _normalize_assets(assets)
         if not assets:
@@ -3461,7 +3468,16 @@ def var_backtest_portfolio(
         n_backtest = int(payload.n_backtest)
         n_simulations = int(payload.n_simulations)
         random_seed = int(payload.random_seed) if payload.random_seed is not None else None
-        cache_method = f"var_backtest_{method}"
+        weight_mode = str(payload.weight_mode)
+        # Effective mode drives the cache key: a weight-only portfolio that requests
+        # drift falls back to constant AND still hits the constant (prewarmed) cache.
+        eff_mode = effective_weight_mode(weight_mode, assets)
+        cache_method = f"var_backtest_{method}" + ("_drift" if eff_mode == "drift" else "")
+        # Keep the constant hash on the minimal {ticker,weight} shape (back-compat with
+        # already-cached runs); include quantity/purchase_date only when drift uses them.
+        hash_assets = assets if eff_mode == "drift" else [
+            {"ticker": a["ticker"], "weight": a["weight"]} for a in assets
+        ]
 
         with Session(engine) as session:
             latest_market_dates = _portfolio_latest_market_dates(
@@ -3471,7 +3487,7 @@ def var_backtest_portfolio(
             {
                 "portfolio_id": pid,
                 "method": cache_method,
-                "assets": assets,
+                "assets": hash_assets,
                 "confidence": confidence,
                 "horizon_days": horizon_days,
                 "est_window": est_window,
@@ -3508,6 +3524,7 @@ def var_backtest_portfolio(
             method=method,
             n_simulations=n_simulations,
             random_seed=random_seed,
+            weight_mode=weight_mode,
         )
         result = _json_compatible(result)
         result["portfolio_id"] = pid
@@ -3576,7 +3593,11 @@ def var_backtest_compare_portfolio(
                 positions = session.exec(
                     select(Position).where(Position.portfolio_id == pid)
                 ).all()
-                assets = [{"ticker": p.ticker, "weight": p.weight} for p in positions]
+                assets = [
+                    {"ticker": p.ticker, "weight": p.weight, "quantity": p.quantity,
+                     "purchase_date": p.purchase_date.isoformat() if p.purchase_date else None}
+                    for p in positions
+                ]
 
         assets = _normalize_assets(assets)
         if not assets:
@@ -3588,7 +3609,12 @@ def var_backtest_compare_portfolio(
         n_backtest = int(payload.n_backtest)
         n_simulations = int(payload.n_simulations)
         random_seed = int(payload.random_seed) if payload.random_seed is not None else None
-        cache_method = "var_backtest_compare"
+        weight_mode = str(payload.weight_mode)
+        eff_mode = effective_weight_mode(weight_mode, assets)
+        cache_method = "var_backtest_compare" + ("_drift" if eff_mode == "drift" else "")
+        hash_assets = assets if eff_mode == "drift" else [
+            {"ticker": a["ticker"], "weight": a["weight"]} for a in assets
+        ]
 
         with Session(engine) as session:
             latest_market_dates = _portfolio_latest_market_dates(
@@ -3598,7 +3624,7 @@ def var_backtest_compare_portfolio(
             {
                 "portfolio_id": pid,
                 "method": cache_method,
-                "assets": assets,
+                "assets": hash_assets,
                 "confidence": confidence,
                 "horizon_days": horizon_days,
                 "est_window": est_window,
@@ -3633,6 +3659,7 @@ def var_backtest_compare_portfolio(
             n_backtest=n_backtest,
             n_simulations=n_simulations,
             random_seed=random_seed,
+            weight_mode=weight_mode,
         )
         result = _json_compatible(result)
         result["portfolio_id"] = pid

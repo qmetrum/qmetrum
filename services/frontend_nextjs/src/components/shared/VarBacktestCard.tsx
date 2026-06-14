@@ -31,9 +31,12 @@ const VIEW_LABEL: Record<View, string> = {
 };
 
 // historical is instant; mps_fan refits the copula each day, so trim the window.
+// Always request the highest-fidelity composition basis; the backend falls back
+// to constant weights for portfolios without share quantities (and that fallback
+// still hits the prewarmed constant cache).
 const SINGLE_PAYLOAD: Record<"historical" | "mps_fan", Parameters<typeof portfolioApi.varBacktest>[1]> = {
-  historical: { method: "historical" },
-  mps_fan: { method: "mps_fan", n_backtest: 120, n_simulations: 400 },
+  historical: { method: "historical", weight_mode: "drift" },
+  mps_fan: { method: "mps_fan", n_backtest: 120, n_simulations: 400, weight_mode: "drift" },
 };
 
 const METHOD_COLOR: Record<string, string> = {
@@ -68,6 +71,24 @@ function ZonePill({ zone }: { zone: "green" | "yellow" | "red" }) {
     <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${style}`}>
       <span className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} />
       Basel: {zone.toUpperCase()}
+    </span>
+  );
+}
+
+function CompositionBadge({ mode }: { mode?: "constant" | "drift" }) {
+  const drift = mode === "drift";
+  return (
+    <span
+      title={drift
+        ? "Buy-and-hold value weights (shares × price) — the realized composition of a held book"
+        : "Current weights applied across the whole window — a VaR model-validation backtest, not a realized-book P&L backtest"}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-semibold ${
+        drift
+          ? "bg-[var(--teal-light)] text-[var(--teal-muted)]"
+          : "bg-[var(--content-bg)] text-[var(--text-secondary)] border border-[var(--card-border)]"
+      }`}
+    >
+      {drift ? "Realized book · buy-and-hold" : "Model validation · current weights"}
     </span>
   );
 }
@@ -143,6 +164,7 @@ function SingleView({ data, method }: { data: VarBacktestResponse; method: "hist
         <Pill ok={!data.christoffersen.conditional_coverage.reject} label="Christoffersen CC" />
         <Pill ok={!data.christoffersen.independence.reject} label="Independence" />
         <ZonePill zone={data.basel_traffic_light.zone} />
+        <CompositionBadge mode={data.weight_mode} />
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Tile label="Exceptions" value={`${data.exceptions} / ${data.expected_exceptions}`}
@@ -165,7 +187,7 @@ function SingleView({ data, method }: { data: VarBacktestResponse; method: "hist
         {data.overlapping_windows && (
           <p className="text-[var(--amber)]">⚠ Horizon &gt; 1 uses overlapping windows; coverage tests assume independence.</p>
         )}
-        <p>Position weights are applied across the whole window (no historical weight versioning).</p>
+        {data.weight_mode_note && <p>Composition basis: {data.weight_mode_note}.</p>}
       </div>
     </>
   );
@@ -224,6 +246,9 @@ function CompareView({ data }: { data: VarBacktestCompareResponse }) {
   const recKey = data.recommended?.key;
   return (
     <>
+      <div className="flex justify-end">
+        <CompositionBadge mode={data.weight_mode} />
+      </div>
       {data.recommended ? (
         <div className="rounded-lg bg-[var(--teal-light)] px-4 py-3 text-sm text-[var(--teal-muted)]">
           ✓ Recommended: <span className="font-semibold">{data.recommended.label}</span> — {data.recommended.why}
@@ -288,6 +313,7 @@ function CompareView({ data }: { data: VarBacktestCompareResponse }) {
           {data.cache?.hit ? " · cached" : ""}
         </p>
         <p>All methods scored on the identical date sample. The MPS d-sweep shows whether finer return binning corrects the anti-conservative d=4 tails.</p>
+        {data.weight_mode_note && <p>Composition basis: {data.weight_mode_note}.</p>}
       </div>
     </>
   );
@@ -307,7 +333,7 @@ export function VarBacktestCard({ portfolioId }: Props) {
 
   const compare = useQuery({
     queryKey: ["portfolio-var-backtest-compare", portfolioId],
-    queryFn: () => portfolioApi.varBacktestCompare(portfolioId),
+    queryFn: () => portfolioApi.varBacktestCompare(portfolioId, { weight_mode: "drift" }),
     enabled: view === "compare",
     staleTime: 1000 * 60 * 30,
     retry: false,
