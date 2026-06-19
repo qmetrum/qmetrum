@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { agentsApi } from "@/lib/api";
 import { SourceDataPanel } from "@/components/shared/SourceDataPanel";
+import { Markdown } from "@/components/shared/Markdown";
+import { AGENT_DISCLAIMER, stripDisclaimer } from "@/components/shared/AgentCard";
 
 type Metrics = Record<string, number | null | undefined>;
 
@@ -146,10 +148,10 @@ export function ClientQADrawer({
             }
             return (
               <div key={i} className="max-w-[90%]">
-                <div className="rounded-lg bg-[var(--content-bg)] px-3 py-2 text-sm text-[var(--text-primary)] whitespace-pre-line leading-relaxed">
-                  {m.text}
+                <div className="rounded-lg bg-[var(--content-bg)] px-3 py-2 leading-relaxed">
+                  <Markdown>{stripDisclaimer(m.text)}</Markdown>
                   {m.cached && (
-                    <span className="ml-2 text-[10px] text-[var(--text-muted)]">(cached)</span>
+                    <span className="mt-1 block text-[10px] text-[var(--text-muted)]">cached</span>
                   )}
                 </div>
                 <SourceDataPanel data={m.sourceData} />
@@ -166,6 +168,7 @@ export function ClientQADrawer({
         </div>
 
         <div className="border-t border-[var(--card-border)] p-3">
+          <p className="mb-2 text-[10px] text-[var(--text-muted)]">{AGENT_DISCLAIMER}</p>
           <div className="flex gap-2">
             <input
               value={input}

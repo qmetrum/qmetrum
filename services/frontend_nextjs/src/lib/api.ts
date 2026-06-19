@@ -779,6 +779,23 @@ export const agentsApi = {
       latency_ms: number;
       source_data: Record<string, unknown>;
     }>(`/agents/qa/${portfolioId}`, payload)).data,
+
+  varBacktestExplain: async (portfolioId: number | string) =>
+    (await api.post<VarBacktestExplainResponse>(
+      `/agents/var-backtest-explain/${portfolioId}`, {}, { timeout: HEAVY_TIMEOUT_MS },
+    )).data,
+};
+
+export type VarBacktestExplainResponse = {
+  headline: string;
+  assessment: string;
+  method_notes: Array<{ method: string; note: string }>;
+  watch: string[];
+  disclaimer: string;
+  cached: boolean;
+  model: string;
+  latency_ms: number;
+  source_data: Record<string, unknown>;
 };
 
 export const screenerApi = {

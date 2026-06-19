@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { agentsApi, alertApi, type AlertRuleResponse } from "@/lib/api";
 import { SourceDataPanel } from "@/components/shared/SourceDataPanel";
+import { Markdown } from "@/components/shared/Markdown";
+import { AGENT_DISCLAIMER, stripDisclaimer } from "@/components/shared/AgentCard";
 
 type Props = {
   // Filter rules to this set of tickers. If omitted, shows all user rules.
@@ -143,15 +145,14 @@ export function AlertRulesList({ tickers, title = "Your Alerts" }: Props) {
                   <div className="border-t border-[var(--card-border)] px-3 py-2">
                     {err && <p className="text-xs text-[var(--coral)]">{err}</p>}
                     {explanation && (
-                      <>
-                        <p className="text-xs text-[var(--text-primary)] leading-relaxed whitespace-pre-line">
-                          {explanation.text}
-                          {explanation.cached && (
-                            <span className="ml-2 text-[10px] text-[var(--text-muted)]">(cached)</span>
-                          )}
-                        </p>
+                      <div className="space-y-1">
+                        <Markdown>{stripDisclaimer(explanation.text)}</Markdown>
+                        {explanation.cached && (
+                          <span className="text-[10px] text-[var(--text-muted)]">cached</span>
+                        )}
                         <SourceDataPanel data={explanation.sourceData} />
-                      </>
+                        <p className="text-[10px] text-[var(--text-muted)]">{AGENT_DISCLAIMER}</p>
+                      </div>
                     )}
                   </div>
                 )}

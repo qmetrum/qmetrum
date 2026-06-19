@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from app.db.database import engine
-from app.db.models import Portfolio, Position, AlertRule, AlertEvent
+from app.db.models import Portfolio, Position, AlertRule, AlertEvent, RiskSimulationCache
 from app.agents import (
     portfolio_commentary,
     scenario_translator,
@@ -16,7 +16,9 @@ from app.agents import (
     news_synthesizer,
     alert_explainer,
     client_qa,
+    var_backtest_explainer,
 )
+from app.agents.disclaimer import DISCLAIMER
 
 
 agents_router = APIRouter()
@@ -113,6 +115,92 @@ def portfolio_commentary_endpoint(
             "metrics": payload.metrics,
             "regime": payload.regime,
             "horizon_days": payload.horizon_days,
+        },
+    )
+
+
+class VarBacktestExplainResponse(BaseModel):
+    headline: str
+    assessment: str
+    method_notes: list[dict[str, Any]]
+    watch: list[str]
+    disclaimer: str
+    cached: bool
+    model: str
+    prompt_tokens: int
+    output_tokens: int
+    latency_ms: int
+    source_data: dict[str, Any]
+
+
+@agents_router.post("/var-backtest-explain/{portfolio_id}", response_model=VarBacktestExplainResponse)
+def var_backtest_explain_endpoint(
+    portfolio_id: int,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Explain the most recent VaR-95 backtest comparison for a portfolio in
+    plain English. Reads the cached comparison server-side (grounded), so the
+    UI just triggers it — no client-supplied numbers."""
+    with Session(engine) as session:
+        user = _require_user_like(session, user_id, x_user_id)
+        portfolio = session.exec(
+            select(Portfolio)
+            .where(Portfolio.id == portfolio_id)
+            .where(Portfolio.user_id == user.id)
+        ).first()
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+
+        row = session.exec(
+            select(RiskSimulationCache)
+            .where(RiskSimulationCache.entity_type == "portfolio")
+            .where(RiskSimulationCache.entity_id == str(portfolio_id))
+            .where(RiskSimulationCache.method.in_(
+                ["var_backtest_compare", "var_backtest_compare_drift"]))
+            .order_by(RiskSimulationCache.created_at.desc())
+        ).first()
+        if not row or not row.result_blob:
+            raise HTTPException(
+                status_code=404,
+                detail="No VaR backtest comparison cached for this portfolio yet — run the comparison first.",
+            )
+        compare = dict(row.result_blob)
+        portfolio_name = portfolio.name or f"Portfolio #{portfolio_id}"
+
+    try:
+        parsed, result = var_backtest_explainer.run(portfolio_name=portfolio_name, compare=compare)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"var backtest explainer failed: {exc}")
+
+    src_methods = [
+        {"method": m.get("label"), "breach_rate": m.get("breach_rate"),
+         "basel_zone": m.get("basel_zone"), "passes": m.get("model_passes"),
+         "status": m.get("status")}
+        for m in compare.get("methods", [])
+    ]
+    return VarBacktestExplainResponse(
+        headline=parsed.get("headline", ""),
+        assessment=parsed.get("assessment", ""),
+        method_notes=parsed.get("method_notes", []),
+        watch=parsed.get("watch", []),
+        disclaimer=DISCLAIMER,
+        cached=result.cached,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        output_tokens=result.output_tokens,
+        latency_ms=result.latency_ms,
+        source_data={
+            "recommended": (compare.get("recommended") or {}).get("label"),
+            "confidence": compare.get("confidence"),
+            "n_observations": compare.get("n_observations"),
+            "weight_mode": compare.get("weight_mode"),
+            "data_window": compare.get("data_window"),
+            "methods": src_methods,
         },
     )
 

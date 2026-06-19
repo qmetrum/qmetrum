@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -16,10 +16,13 @@ import {
 } from "recharts";
 import {
   portfolioApi,
+  agentsApi,
   type VarBacktestResponse,
   type VarBacktestCompareResponse,
   type VarBacktestMethodResult,
+  type VarBacktestExplainResponse,
 } from "@/lib/api";
+import { SourceDataPanel } from "@/components/shared/SourceDataPanel";
 
 type Props = { portfolioId: string | number };
 type View = "historical" | "mps_fan" | "compare";
@@ -320,6 +323,92 @@ function CompareView({ data }: { data: VarBacktestCompareResponse }) {
 }
 
 // --------------------------------------------------------------------------- //
+// AI risk read — plain-English interpretation of the comparison (var_backtest_explain
+// agent). Demonstrates the better agent-UI pattern: structured render (no prose
+// blob), loading skeleton, humanized error, copy, source-data panel, inline disclaimer.
+// --------------------------------------------------------------------------- //
+function ExplainPanel({ portfolioId }: { portfolioId: string | number }) {
+  const [data, setData] = useState<VarBacktestExplainResponse | null>(null);
+  const m = useMutation({
+    mutationFn: () => agentsApi.varBacktestExplain(portfolioId),
+    onSuccess: setData,
+  });
+  const err = m.error as { response?: { data?: { detail?: string } }; message?: string } | null;
+  const errMsg = err ? (err.response?.data?.detail ?? err.message ?? "Explanation unavailable") : null;
+  const copy = () => {
+    if (!data) return;
+    navigator.clipboard?.writeText(
+      [data.headline, "", data.assessment, "",
+        ...data.method_notes.map((n) => `• ${n.method}: ${n.note}`),
+        ...data.watch.map((w) => `⚠ ${w}`)].join("\n"),
+    );
+  };
+  return (
+    <div className="rounded-lg border border-[var(--card-border)] p-4 space-y-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--text-primary)]">AI risk read</h3>
+          <p className="text-[11px] text-[var(--text-secondary)]">Plain-English interpretation of the coverage results.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {data && (
+            <button onClick={copy} className="text-[11px] font-medium text-[var(--text-secondary)] hover:text-[var(--navy)]">
+              Copy
+            </button>
+          )}
+          <button
+            onClick={() => m.mutate()}
+            disabled={m.isPending}
+            className="text-xs font-medium bg-[var(--navy)] text-white px-3 py-1.5 rounded-lg hover:opacity-90 disabled:opacity-50"
+          >
+            {m.isPending ? "Reading…" : data ? "Refresh" : "Explain this backtest"}
+          </button>
+        </div>
+      </div>
+
+      {m.isPending && (
+        <div className="space-y-2">
+          <div className="h-3 w-2/3 animate-pulse rounded bg-[var(--card-border)]" />
+          <div className="h-3 w-full animate-pulse rounded bg-[var(--card-border)]" />
+          <div className="h-3 w-5/6 animate-pulse rounded bg-[var(--card-border)]" />
+        </div>
+      )}
+
+      {errMsg && !m.isPending && (
+        <div className="rounded bg-[var(--coral-light)] px-3 py-2 text-xs text-[var(--coral)]">{errMsg}</div>
+      )}
+
+      {data && !m.isPending && (
+        <div className="space-y-3">
+          <p className="text-sm font-semibold text-[var(--navy)]">{data.headline}</p>
+          <p className="text-sm leading-relaxed text-[var(--text-primary)]">{data.assessment}</p>
+          {data.method_notes.length > 0 && (
+            <ul className="space-y-1">
+              {data.method_notes.map((n, i) => (
+                <li key={i} className="text-xs text-[var(--text-secondary)]">
+                  <span className="font-medium text-[var(--text-primary)]">{n.method}:</span> {n.note}
+                </li>
+              ))}
+            </ul>
+          )}
+          {data.watch.length > 0 && (
+            <div className="space-y-0.5">
+              {data.watch.map((w, i) => (
+                <p key={i} className="text-xs text-[var(--amber)]">⚠ {w}</p>
+              ))}
+            </div>
+          )}
+          <SourceDataPanel data={data.source_data} />
+          <p className="text-[10px] text-[var(--text-muted)]">
+            {data.cached ? "Cached · " : ""}{data.model} · {data.disclaimer}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --------------------------------------------------------------------------- //
 export function VarBacktestCard({ portfolioId }: Props) {
   const [view, setView] = useState<View>("historical");
 
@@ -386,7 +475,12 @@ export function VarBacktestCard({ portfolioId }: Props) {
       {view !== "compare" && single.data && !single.isLoading && (
         <SingleView data={single.data} method={view as "historical" | "mps_fan"} />
       )}
-      {view === "compare" && compare.data && !compare.isLoading && <CompareView data={compare.data} />}
+      {view === "compare" && compare.data && !compare.isLoading && (
+        <>
+          <CompareView data={compare.data} />
+          <ExplainPanel portfolioId={portfolioId} />
+        </>
+      )}
     </div>
   );
 }
