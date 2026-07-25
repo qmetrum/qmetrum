@@ -13,6 +13,29 @@ from app.services.market_store import get_price_series_cached, get_fundamentals_
 
 logger = logging.getLogger(__name__)
 
+# Server built-in calibration scenarios: one knob turned at a time, so they act
+# as fixed reference points alongside the user's (usually multi-knob) scenarios.
+# "base" (all-neutral) and the adversarial "worst_case_cvar" are NOT part of
+# this set — they are always generated regardless of the include flag.
+BUILTIN_SCENARIO_DEFS = {
+    "bull_10": {"initial_shock_pct": 0.10, "return_scale": 1.0, "drift_shift": 0.0},
+    "bear_10": {"initial_shock_pct": -0.10, "return_scale": 1.0, "drift_shift": 0.0},
+    "high_vol_regime": {"initial_shock_pct": 0.0, "return_scale": 1.25, "drift_shift": 0.0},
+    "low_vol_regime": {"initial_shock_pct": 0.0, "return_scale": 0.75, "drift_shift": 0.0},
+}
+
+
+def build_scenario_defs(scenarios, include_builtins=True):
+    """Merge custom scenario defs over the builtin set (customs win by name)."""
+    defs = {k: dict(v) for k, v in BUILTIN_SCENARIO_DEFS.items()} if include_builtins else {}
+    for scenario in scenarios or []:
+        name = str(scenario.get("name", "")).strip()
+        if not name:
+            continue
+        defs[name] = scenario
+    return defs
+
+
 class PortfolioManager:
     """
     Orchestrates the forecasting of N assets and aggregates them
@@ -170,7 +193,8 @@ class PortfolioManager:
             "fundamentals_map": fund_map,
         }
 
-    def analyze_portfolio(self, horizon_days=90, scenarios=None, target_weights=None):
+    def analyze_portfolio(self, horizon_days=90, scenarios=None, target_weights=None,
+                          include_builtin_scenarios=True):
         # 1. GET DATA + SYNTHETIC HISTORY (Batch)
         synthetic_bundle = self.build_synthetic_history()
         if synthetic_bundle.get("error"):
@@ -322,17 +346,8 @@ class PortfolioManager:
                 path.append(float(curr_price))
             return path
 
-        scenario_defs = {
-            "bull_10": {"initial_shock_pct": 0.10, "return_scale": 1.0, "drift_shift": 0.0},
-            "bear_10": {"initial_shock_pct": -0.10, "return_scale": 1.0, "drift_shift": 0.0},
-            "high_vol_regime": {"initial_shock_pct": 0.0, "return_scale": 1.25, "drift_shift": 0.0},
-            "low_vol_regime": {"initial_shock_pct": 0.0, "return_scale": 0.75, "drift_shift": 0.0},
-        }
-        for scenario in scenarios or []:
-            name = str(scenario.get("name", "")).strip()
-            if not name:
-                continue
-            scenario_defs[name] = scenario
+        scenario_defs = build_scenario_defs(
+            scenarios, include_builtins=include_builtin_scenarios)
 
         # --- MPS-copula scenario fans ---
         # Try to sample the portfolio's joint return distribution non-parametrically

@@ -41,6 +41,30 @@ export const DISPLAY_NAMES: Record<string, string> = {
   low_vol_regime: "Low vol",
 };
 
+/** Server built-in calibration scenarios (one knob at a time). The user can
+ *  exclude/re-include these per run via include_builtin_scenarios. */
+export const BUILTIN_SCENARIO_INFO: Record<string, string> = {
+  bull_10: "Built-in: pure +10% starting-price shock — volatility and drift unchanged",
+  bear_10: "Built-in: pure −10% starting-price shock — volatility and drift unchanged",
+  high_vol_regime: "Built-in: volatility ×1.25, no price shock",
+  low_vol_regime: "Built-in: volatility ×0.75, no price shock",
+};
+
+/** Always-generated server scenarios (not toggleable). */
+export const AUTO_SCENARIO_INFO: Record<string, string> = {
+  base: "Reference: no shock, no vol change — the baseline the other scenarios compare against",
+  worst_case_cvar:
+    "Auto-discovered: gradient search over correlated asset shocks that maximises tail loss (CVaR)",
+};
+
+/** Origin label for a scenario name; null for the user's own scenarios. */
+export function scenarioOrigin(name: string): "Built-in" | "Reference" | "Auto-discovered" | null {
+  if (name in BUILTIN_SCENARIO_INFO) return "Built-in";
+  if (name === "base") return "Reference";
+  if (name === "worst_case_cvar") return "Auto-discovered";
+  return null;
+}
+
 function fanHas1s(f: ScenarioFan): boolean {
   return Array.isArray(f.lower_1s) && Array.isArray(f.upper_1s) && f.lower_1s.length > 0;
 }

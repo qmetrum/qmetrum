@@ -577,6 +577,7 @@ export const portfolioApi = {
       horizon_days?: number;
       scenarios?: ForecastScenarioInput[];
       target_weights?: Record<string, number>;
+      include_builtin_scenarios?: boolean;
     } = {},
     options?: {
       async_mode?: boolean;

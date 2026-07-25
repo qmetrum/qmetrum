@@ -230,6 +230,10 @@ class PortfolioRequest(BaseModel):
     horizon_days: int = 90
     scenarios: Optional[List[ScenarioInput]] = None
     target_weights: Optional[Dict[str, float]] = None
+    # When False, skip the server's built-in calibration scenarios
+    # (bull_10 / bear_10 / high_vol_regime / low_vol_regime); "base" and the
+    # adversarial worst_case_cvar are always included.
+    include_builtin_scenarios: bool = True
 
 
 class PortfolioQuantumRiskRequest(BaseModel):
@@ -594,6 +598,7 @@ def _portfolio_forecast_input_hash(
     scenarios: Optional[List[dict]],
     target_weights: Optional[Dict[str, float]],
     latest_market_dates: Dict[str, Optional[str]],
+    include_builtin_scenarios: bool = True,
 ) -> str:
     payload = {
         "entity_type": entity_type,
@@ -604,6 +609,9 @@ def _portfolio_forecast_input_hash(
         "target_weights": target_weights or {},
         "latest_market_dates": latest_market_dates,
     }
+    # Only key the flag when non-default so existing cache rows stay valid.
+    if not include_builtin_scenarios:
+        payload["include_builtin_scenarios"] = False
     return _stable_json_hash(payload)
 
 
@@ -731,6 +739,16 @@ def _portfolio_forecast_result_with_cache_meta(
     return result
 
 
+def _nightly_blob_has_scenarios(blob: Optional[dict]) -> bool:
+    """A nightly blob is only servable for scenario surfaces when its scenario
+    set is present. A failed analyze_portfolio step (or a pre-extras legacy
+    blob) leaves extras.scenarios empty — serving that would return ZERO
+    scenarios (not even base/worst_case_cvar, which live compute always emits)."""
+    if not blob:
+        return False
+    return bool((blob.get("portfolio_summary_extras") or {}).get("scenarios"))
+
+
 def _adapt_nightly_blob_to_ui(blob: dict, portfolio_id: int) -> dict:
     """
     Transform the nightly batch's PortfolioReportDataCache blob into the
@@ -846,12 +864,14 @@ def _compute_portfolio_forecast_result(
     horizon_days: int,
     scenarios: Optional[List[dict]],
     target_weights: Optional[Dict[str, float]],
+    include_builtin_scenarios: bool = True,
 ) -> dict:
     manager = PortfolioManager(assets)
     result = manager.analyze_portfolio(
         horizon_days=int(horizon_days),
         scenarios=scenarios,
         target_weights=target_weights,
+        include_builtin_scenarios=include_builtin_scenarios,
     )
     if portfolio_id is not None:
         result["portfolio_id"] = int(portfolio_id)
@@ -965,6 +985,7 @@ def _run_portfolio_forecast_job(job_id: str, assume_claimed: bool = False) -> bo
             horizon_days=horizon_days,
             scenarios=scenarios,
             target_weights=target_weights,
+            include_builtin_scenarios=bool(payload.get("include_builtin_scenarios", True)),
         )
         result_blob = _json_compatible(result)
 
@@ -1039,6 +1060,7 @@ def _enqueue_portfolio_forecast_job(
     target_weights: Optional[Dict[str, float]],
     store_results: bool = True,
     force_refresh: bool = False,
+    include_builtin_scenarios: bool = True,
 ) -> dict:
     with Session(engine) as session:
         latest_market_dates = _portfolio_latest_market_dates(session, [a["ticker"] for a in assets])
@@ -1050,6 +1072,7 @@ def _enqueue_portfolio_forecast_job(
             scenarios=scenarios,
             target_weights=target_weights,
             latest_market_dates=latest_market_dates,
+            include_builtin_scenarios=include_builtin_scenarios,
         )
         request_hash = _stable_json_hash(
             {
@@ -1076,14 +1099,17 @@ def _enqueue_portfolio_forecast_job(
                     "dispatch_backend": "cache",
                 }
 
-            # Fallback: check nightly batch cache (PortfolioReportDataCache)
-            if portfolio_id is not None:
+            # Fallback: check nightly batch cache (PortfolioReportDataCache).
+            # Same rule as the inline path: the nightly blob was computed with
+            # scenarios=[], so never serve it for custom-scenario requests
+            # (or when the builtin set was explicitly excluded).
+            if portfolio_id is not None and not scenarios and include_builtin_scenarios:
                 report_cached = session.exec(
                     select(PortfolioReportDataCache)
                     .where(PortfolioReportDataCache.portfolio_id == int(portfolio_id))
                     .order_by(PortfolioReportDataCache.updated_at.desc())
                 ).first()
-                if report_cached and report_cached.result_blob:
+                if report_cached and _nightly_blob_has_scenarios(report_cached.result_blob):
                     result = _adapt_nightly_blob_to_ui(report_cached.result_blob, int(portfolio_id))
                     logger.info(f"Portfolio {portfolio_id} served from nightly batch cache (async path)")
                     return {
@@ -1130,6 +1156,7 @@ def _enqueue_portfolio_forecast_job(
                 "input_hash": input_hash,
                 "latest_market_dates": latest_market_dates,
                 "store_results": bool(store_results),
+                "include_builtin_scenarios": bool(include_builtin_scenarios),
             }
         )
         job = ForecastJob(
@@ -2482,24 +2509,27 @@ def forecast_portfolio(payload: PortfolioRequest):
         if not assets:
             raise HTTPException(status_code=400, detail="assets are required")
 
-        # Try nightly cache — match by tickers
-        requested_tickers = set(a["ticker"] for a in assets)
-        try:
-            with Session(engine) as session:
-                all_cached = session.exec(
-                    select(PortfolioReportDataCache)
-                    .order_by(PortfolioReportDataCache.updated_at.desc())
-                ).all()
-                for cached in all_cached:
-                    if cached.result_blob:
-                        cached_tickers = set(cached.result_blob.get("tickers", []))
-                        if requested_tickers == cached_tickers:
-                            logger.info(f"forecast_portfolio served from nightly cache (portfolio {cached.portfolio_id})")
-                            return _adapt_nightly_blob_to_ui(cached.result_blob, cached.portfolio_id)
-        except Exception as e:
-            logger.warning(f"Nightly cache lookup failed: {e}")
-
         scenario_defs = _scenario_to_dicts(payload.scenarios)
+
+        # Try nightly cache — match by tickers. Same rule as the v2 endpoint:
+        # the nightly blob was computed with scenarios=[], so never serve it
+        # when the request carries custom scenarios or excludes the builtins.
+        if not scenario_defs and payload.include_builtin_scenarios:
+            requested_tickers = set(a["ticker"] for a in assets)
+            try:
+                with Session(engine) as session:
+                    all_cached = session.exec(
+                        select(PortfolioReportDataCache)
+                        .order_by(PortfolioReportDataCache.updated_at.desc())
+                    ).all()
+                    for cached in all_cached:
+                        if _nightly_blob_has_scenarios(cached.result_blob):
+                            cached_tickers = set(cached.result_blob.get("tickers", []))
+                            if requested_tickers == cached_tickers:
+                                logger.info(f"forecast_portfolio served from nightly cache (portfolio {cached.portfolio_id})")
+                                return _adapt_nightly_blob_to_ui(cached.result_blob, cached.portfolio_id)
+            except Exception as e:
+                logger.warning(f"Nightly cache lookup failed: {e}")
         target_weights = _normalize_target_weights(
             payload.target_weights,
             known_tickers=[a["ticker"] for a in assets],
@@ -2510,6 +2540,7 @@ def forecast_portfolio(payload: PortfolioRequest):
             horizon_days=payload.horizon_days,
             scenarios=scenario_defs,
             target_weights=target_weights,
+            include_builtin_scenarios=payload.include_builtin_scenarios,
         )
         return result
     except HTTPException:
@@ -2906,6 +2937,7 @@ def forecast_portfolio_v2(
                 target_weights=target_weights,
                 store_results=store_portfolio_runs,
                 force_refresh=force_refresh,
+                include_builtin_scenarios=payload.include_builtin_scenarios,
             )
             submit["async_mode"] = True
             submit["storage_enabled"] = store_portfolio_runs
@@ -2933,6 +2965,7 @@ def forecast_portfolio_v2(
                 scenarios=scenario_defs,
                 target_weights=target_weights,
                 latest_market_dates=latest_market_dates,
+                include_builtin_scenarios=payload.include_builtin_scenarios,
             )
             if store_portfolio_runs and not force_refresh:
                 cached = _portfolio_forecast_cache_read(
@@ -2950,8 +2983,17 @@ def forecast_portfolio_v2(
                 if isinstance(v, str) and v
             ]
 
-        # Fallback: check PortfolioReportDataCache (populated by nightly batch)
-        if cached_result is None and not force_refresh:
+        # Fallback: check PortfolioReportDataCache (populated by nightly batch).
+        # The nightly blob is computed with scenarios=[] — serving it for a
+        # request that carries custom scenarios (or excludes the builtin set)
+        # would silently swap the user's scenario set for the nightly defaults,
+        # so only use it for default runs.
+        if (
+            cached_result is None
+            and not force_refresh
+            and not scenario_defs
+            and payload.include_builtin_scenarios
+        ):
             try:
                 with Session(engine) as session2:
                     report_cached = session2.exec(
@@ -2959,7 +3001,7 @@ def forecast_portfolio_v2(
                         .where(PortfolioReportDataCache.portfolio_id == pid)
                         .order_by(PortfolioReportDataCache.updated_at.desc())
                     ).first()
-                    if report_cached and report_cached.result_blob:
+                    if report_cached and _nightly_blob_has_scenarios(report_cached.result_blob):
                         cached_result = _adapt_nightly_blob_to_ui(report_cached.result_blob, pid)
                         logger.info(f"Portfolio {pid} served from nightly batch cache")
             except Exception as e:
@@ -2982,6 +3024,7 @@ def forecast_portfolio_v2(
             horizon_days=payload.horizon_days,
             scenarios=scenario_defs,
             target_weights=target_weights,
+            include_builtin_scenarios=payload.include_builtin_scenarios,
         )
         result_blob = _json_compatible(result)
         data_last_date = max(parsed_dates) if parsed_dates else None
@@ -2998,6 +3041,7 @@ def forecast_portfolio_v2(
                 "input_hash": input_hash,
                 "latest_market_dates": latest_market_dates,
                 "execution_mode": "inline",
+                "include_builtin_scenarios": payload.include_builtin_scenarios,
             }
         )
         cache_row = None

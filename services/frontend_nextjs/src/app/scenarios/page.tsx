@@ -74,6 +74,13 @@ export default function ScenariosPage() {
   // Bumped on every completed run — remounts the AI cards so explanations
   // from a previous scenario set / portfolio never linger next to new results.
   const [runId, setRunId] = useState(0);
+  // Include the server's built-in calibration scenarios (bull_10, bear_10,
+  // high/low vol) alongside the configured set. Base and the adversarial
+  // worst-case are always computed regardless.
+  const [includeBuiltins, setIncludeBuiltins] = useState(true);
+  // Flag value snapshotted when the displayed run completed — the legend must
+  // describe the results on screen, not the live checkbox state.
+  const [runHadBuiltins, setRunHadBuiltins] = useState(true);
 
   const translateMutation = useMutation({
     mutationFn: (desc: string) => agentsApi.translateScenario(desc),
@@ -124,7 +131,7 @@ export default function ScenariosPage() {
       }));
       const res = await portfolioApi.forecast(
         selectedPortfolio,
-        { horizon_days: 90, scenarios: scenarioInputs },
+        { horizon_days: 90, scenarios: scenarioInputs, include_builtin_scenarios: includeBuiltins },
         { async_mode: false }
       );
       const fc = res?.result ?? res;
@@ -157,6 +164,7 @@ export default function ScenariosPage() {
       }
       setResults(flat ?? scenarioLegacy ?? null);
       setFanResults(Object.keys(fans).length > 0 ? fans : null);
+      setRunHadBuiltins(includeBuiltins);
       setRunId((n) => n + 1);
     } catch {
       // handle error silently
@@ -372,6 +380,26 @@ export default function ScenariosPage() {
             </div>
           )}
 
+          {/* Server built-in scenarios toggle */}
+          <div className="rounded-lg bg-[var(--content-bg)] px-3 py-2.5">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={includeBuiltins}
+                onChange={(e) => setIncludeBuiltins(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[var(--teal)]"
+              />
+              <span className="text-xs font-medium text-[var(--text-primary)]">
+                Include built-in scenarios
+              </span>
+            </label>
+            <p className="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">
+              Fixed one-knob calibration scenarios the server runs alongside yours: Bull +10% / Bear
+              −10% (pure price shocks) and High / Low vol (volatility ×1.25 / ×0.75, no shock). The
+              Base reference and the machine-discovered Adversarial worst-case are always included.
+            </p>
+          </div>
+
           <div className="pt-2 space-y-2">
             <button
               onClick={runScenarios}
@@ -508,9 +536,20 @@ export default function ScenariosPage() {
                   }}
                 />
               </div>
-              <p className="text-xs text-[var(--text-muted)] mb-4">
+              <p className="text-xs text-[var(--text-muted)] mb-1">
                 All scenario centrals are drawn by default. Click a scenario to bring its ±1σ and ±2σ bands forward
                 (the others fade to 30%). Bands capture non-Gaussian cross-asset dependence sampled from the MPS.
+              </p>
+              <p className="text-[10px] text-[var(--text-muted)] mb-4">
+                Server-added: <span className="font-medium">Base</span> (neutral reference)
+                {fanResults["worst_case_cvar"] ? (
+                  <> · <span className="font-medium">Adversarial worst-case</span> (machine-searched shock combination)</>
+                ) : null}
+                {runHadBuiltins ? (
+                  <> · Built-ins: <span className="font-medium">Bull +10% / Bear −10%</span> (pure price shocks),{" "}
+                  <span className="font-medium">High / Low vol</span> (pure volatility regimes)</>
+                ) : null}
+                . Scenarios you configured keep the names you gave them.
               </p>
               <ScenarioPathsChart
                 fans={fanResults}

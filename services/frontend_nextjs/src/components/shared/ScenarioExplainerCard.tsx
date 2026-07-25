@@ -7,8 +7,11 @@ import { AgentCard } from "@/components/shared/AgentCard";
 import { Markdown } from "@/components/shared/Markdown";
 import {
   ADVERSARIAL_COLOR,
+  AUTO_SCENARIO_INFO,
+  BUILTIN_SCENARIO_INFO,
   DEFAULT_COLOR,
   DISPLAY_NAMES,
+  scenarioOrigin,
 } from "@/components/charts/ScenarioPathsChart";
 
 type ScenarioSpec = { name: string; shock: number; volScale: number; drift: number; color: string };
@@ -40,6 +43,9 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
   const specByName = new Map(scenarios.map((s) => [s.name, s]));
   const colourFor = (name: string) =>
     name === "worst_case_cvar" ? ADVERSARIAL_COLOR : specByName.get(name)?.color ?? DEFAULT_COLOR;
+  // A name the user configured is THEIR scenario even if it collides with a
+  // reserved server name (customs override builtins by name server-side).
+  const originFor = (name: string) => (specByName.has(name) ? null : scenarioOrigin(name));
 
   const eligible = Object.entries(fans).filter(
     ([k, v]) =>
@@ -142,6 +148,14 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
                 <span className="text-xs font-semibold text-[var(--text-primary)]">
                   {DISPLAY_NAMES[e.name] ?? e.name}
                 </span>
+                {originFor(e.name) && (
+                  <span
+                    className="rounded-full bg-[var(--content-bg)] px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[var(--text-muted)]"
+                    title={BUILTIN_SCENARIO_INFO[e.name] ?? AUTO_SCENARIO_INFO[e.name]}
+                  >
+                    {originFor(e.name)}
+                  </span>
+                )}
               </div>
               <p className="mt-1 text-xs font-medium text-[var(--text-secondary)]">{e.headline}</p>
               <div className="mt-1">
