@@ -150,11 +150,40 @@ async def _log_http_exception(request: Request, exc: HTTPException):
 
 
 # --- LIFECYCLE EVENTS ---
+def _reap_orphaned_forecast_jobs() -> None:
+    """Forecast jobs run in this process's threadpool, so any 'queued' or
+    'running' row present at boot belonged to a previous instance (killed by a
+    deploy/restart) and can never complete. Left alone, clients poll the corpse
+    forever — and worse, a resubmit with the same request hash RE-ATTACHES to
+    it instead of starting a fresh job. Fail them at startup."""
+    now = datetime.utcnow()
+    try:
+        with Session(engine) as session:
+            stale = session.exec(
+                select(ForecastJob).where(ForecastJob.status.in_(["queued", "running"]))
+            ).all()
+            for job in stale:
+                job.status = "failed"
+                job.error_message = (
+                    job.error_message
+                    or "Interrupted by a server restart or deploy — run it again."
+                )
+                job.finished_at = job.finished_at or now
+                job.updated_at = now
+                session.add(job)
+            if stale:
+                session.commit()
+                logger.warning("Reaped %d orphaned forecast job(s) at startup.", len(stale))
+    except Exception as e:
+        logger.warning(f"Orphaned forecast job reaping failed: {e}")
+
+
 @app.on_event("startup")
 def on_startup():
     """Initialize the Database on Server Startup"""
     init_db()
     _ensure_default_user()
+    _reap_orphaned_forecast_jobs()
     logger.info(
         "CORS configured: allow_all=%s origins=%s origin_regex=%s",
         CORS_ALLOW_ALL,

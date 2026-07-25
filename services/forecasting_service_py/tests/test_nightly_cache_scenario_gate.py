@@ -196,6 +196,28 @@ def test_scenarioless_nightly_blob_never_served(client, monkeypatch):
     assert resp.json()["mode"] == "live"                   # blob rejected
 
 
+def test_startup_reaper_fails_orphaned_jobs(portfolio_id):
+    from app.db.models import ForecastJob
+
+    with Session(engine) as s:
+        for jid, status in [("reap-q", "queued"), ("reap-r", "running"), ("reap-c", "completed")]:
+            s.add(ForecastJob(
+                id=jid, owner_user_id=USER_ID, job_type="portfolio_forecast",
+                entity_type="portfolio", entity_id=str(portfolio_id),
+                status=status, request_hash=f"rh-{jid}", request_payload={}))
+        s.commit()
+
+    m._reap_orphaned_forecast_jobs()
+
+    with Session(engine) as s:
+        jobs = {j.id: j for j in [s.get(ForecastJob, f"reap-{k}") for k in "qrc"]}
+        assert jobs["reap-q"].status == "failed"
+        assert jobs["reap-r"].status == "failed"
+        assert "restart" in (jobs["reap-r"].error_message or "")
+        assert jobs["reap-r"].finished_at is not None
+        assert jobs["reap-c"].status == "completed"      # untouched
+
+
 def test_forecast_portfolio_gate(client, portfolio_id, monkeypatch):
     assets = [{"ticker": "AAA", "weight": 0.6}, {"ticker": "BBB", "weight": 0.4}]
 
