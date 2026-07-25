@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useBranding } from "@/components/providers/BrandingProvider";
 import {
   agentsApi,
+  forecastJobApi,
   portfolioApi,
   portfolioListApi,
   reportsApi,
@@ -86,6 +87,8 @@ export default function ScenariosPage() {
   // Flag value snapshotted when the displayed run completed — the legend must
   // describe the results on screen, not the live checkbox state.
   const [runHadBuiltins, setRunHadBuiltins] = useState(true);
+  const [runError, setRunError] = useState<string | null>(null);
+  const [runProgress, setRunProgress] = useState<{ elapsed: number; progress: number | null } | null>(null);
 
   const translateMutation = useMutation({
     mutationFn: (desc: string) => agentsApi.translateScenario(desc),
@@ -127,6 +130,9 @@ export default function ScenariosPage() {
   async function runScenarios() {
     if (!selectedPortfolio) return;
     setRunning(true);
+    setRunError(null);
+    setRunProgress(null);
+    const t0 = Date.now();
     try {
       const scenarioInputs: ForecastScenarioInput[] = scenarios.map((s) => ({
         name: s.name,
@@ -134,11 +140,38 @@ export default function ScenariosPage() {
         return_scale: s.volScale,
         drift_shift: s.drift,
       }));
-      const res = await portfolioApi.forecast(
+      // Submit as an async job: cold computes can take many minutes (per-asset
+      // retraining), far beyond any sane HTTP timeout. The job queue also
+      // dedups by request hash, so a retry click re-attaches to the running
+      // job instead of stacking another compute.
+      let res = await portfolioApi.forecast(
         selectedPortfolio,
         { horizon_days: 90, scenarios: scenarioInputs, include_builtin_scenarios: includeBuiltins },
-        { async_mode: false }
+        { async_mode: true }
       );
+      if (res.mode === "job" && res.job_id) {
+        const jobId = res.job_id;
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const j = await forecastJobApi.get(jobId);
+          setRunProgress({
+            elapsed: Math.round((Date.now() - t0) / 1000),
+            progress: typeof j.job?.progress === "number" ? j.job.progress : null,
+          });
+          if (j.job?.status === "completed") {
+            res = { mode: "job", result: j.result ?? null };
+            break;
+          }
+          if (j.job?.status === "failed") {
+            throw new Error(j.job?.error_message || j.error || "Scenario computation failed on the server");
+          }
+          if (Date.now() - t0 > 15 * 60_000) {
+            throw new Error(
+              "Still computing after 15 minutes — the job keeps running server-side; hit Run again in a bit to re-attach.",
+            );
+          }
+        }
+      }
       const fc = res?.result ?? res;
       const summary = (fc as Record<string, unknown>)?.portfolio_summary as Record<string, unknown> | undefined;
       // Prefer the new fan shape's `central` path when present; fall back to the
@@ -167,14 +200,24 @@ export default function ScenariosPage() {
           fans[name] = { central: arr };
         }
       }
+      if (!flat && !scenarioLegacy && Object.keys(fans).length === 0) {
+        throw new Error("The forecast returned no scenario data");
+      }
       setResults(flat ?? scenarioLegacy ?? null);
       setFanResults(Object.keys(fans).length > 0 ? fans : null);
       setRunHadBuiltins(includeBuiltins);
       setRunId((n) => n + 1);
-    } catch {
-      // handle error silently
+    } catch (e) {
+      // Never fail silently: stale results with no explanation are worse than
+      // an honest error.
+      const err = e as { response?: { data?: { detail?: unknown } }; message?: string };
+      const detail = err.response?.data?.detail;
+      setRunError(
+        typeof detail === "string" ? detail : err.message ?? "Scenario run failed",
+      );
     } finally {
       setRunning(false);
+      setRunProgress(null);
     }
   }
 
@@ -450,8 +493,25 @@ export default function ScenariosPage() {
               disabled={!selectedPortfolio || running || scenarios.length === 0}
               className="w-full rounded-lg bg-[var(--teal)] px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
             >
-              {running ? "Running scenarios..." : "Run All Scenarios"}
+              {running
+                ? runProgress
+                  ? `Computing… ${Math.floor(runProgress.elapsed / 60)}:${String(runProgress.elapsed % 60).padStart(2, "0")}${
+                      runProgress.progress != null ? ` · ${Math.round(runProgress.progress * 100)}%` : ""
+                    }`
+                  : "Running scenarios..."
+                : "Run All Scenarios"}
             </button>
+            {running && runProgress && (
+              <p className="text-[10px] text-[var(--text-muted)]">
+                First run after new market data retrains asset forecasts and can take several
+                minutes; reruns are fast. The job keeps running server-side even if you leave.
+              </p>
+            )}
+            {runError && !running && (
+              <div className="rounded-lg bg-[var(--coral-light)] px-3 py-2 text-xs text-[var(--coral)]">
+                Scenario run failed: {runError}
+              </div>
+            )}
             <button
               onClick={exportPdf}
               disabled={!selectedPortfolio}
