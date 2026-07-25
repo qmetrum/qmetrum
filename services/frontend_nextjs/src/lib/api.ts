@@ -700,6 +700,23 @@ export type ScenarioTranslateResponse = {
   latency_ms: number;
 };
 
+export type ScenarioExplanation = {
+  name: string;
+  headline: string;
+  narrative: string;
+};
+
+export type ScenarioExplainResponse = {
+  explanations: ScenarioExplanation[];
+  disclaimer: string;
+  cached: boolean;
+  model: string;
+  prompt_tokens: number;
+  output_tokens: number;
+  latency_ms: number;
+  source_data: Record<string, unknown>;
+};
+
 export type NewsSynthesisResponse = {
   summary: string;
   sentiment: "bullish" | "bearish" | "mixed" | "neutral";
@@ -763,6 +780,22 @@ export const agentsApi = {
       latency_ms: number;
       source_data: Record<string, unknown>;
     }>(`/agents/scenario-summary`, payload)).data,
+
+  explainScenarios: async (payload: {
+    portfolio_name: string;
+    portfolio_value: number;
+    scenarios: Array<{
+      name: string;
+      shock_pct?: number;
+      vol_scale?: number;
+      drift_shift?: number;
+      fan: ScenarioFan & { p5?: number[]; p95?: number[] };
+      discovery?: Record<string, unknown>;
+    }>;
+  }) =>
+    (await api.post<ScenarioExplainResponse>(
+      `/agents/scenario-explain`, payload, { timeout: HEAVY_TIMEOUT_MS },
+    )).data,
 
   clientQA: async (
     portfolioId: number | string,

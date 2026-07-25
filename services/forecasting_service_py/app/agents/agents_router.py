@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, Header, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, select
 
 from app.db.database import engine
@@ -13,6 +13,7 @@ from app.agents import (
     portfolio_commentary,
     scenario_translator,
     scenario_summary,
+    scenario_explainer,
     news_synthesizer,
     alert_explainer,
     client_qa,
@@ -286,6 +287,92 @@ def scenario_summary_endpoint(payload: ScenarioSummaryRequest):
             "portfolio_name": payload.portfolio_name,
             "portfolio_value": payload.portfolio_value,
             "scenarios": scenarios_data,
+        },
+    )
+
+
+class ScenarioFanInput(BaseModel):
+    central: list[float] = Field(min_length=2, max_length=400)
+    lower_1s: Optional[list[float]] = Field(default=None, max_length=400)
+    upper_1s: Optional[list[float]] = Field(default=None, max_length=400)
+    lower_2s: Optional[list[float]] = Field(default=None, max_length=400)
+    upper_2s: Optional[list[float]] = Field(default=None, max_length=400)
+    p5: Optional[list[float]] = Field(default=None, max_length=400)
+    p95: Optional[list[float]] = Field(default=None, max_length=400)
+
+
+class ScenarioExplainItem(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    shock_pct: Optional[float] = None  # UI vocabulary: percent, not decimal
+    vol_scale: Optional[float] = None
+    drift_shift: Optional[float] = None
+    fan: ScenarioFanInput
+    discovery: Optional[dict[str, Any]] = None  # _discovery block for worst_case_cvar
+
+
+class ScenarioExplainRequest(BaseModel):
+    portfolio_name: str = Field(max_length=200)
+    portfolio_value: float
+    scenarios: list[ScenarioExplainItem] = Field(min_length=1, max_length=12)
+
+
+class ScenarioExplainResponse(BaseModel):
+    explanations: list[dict[str, Any]]  # {name, headline, narrative}
+    disclaimer: str
+    cached: bool
+    model: str
+    prompt_tokens: int
+    output_tokens: int
+    latency_ms: int
+    source_data: dict[str, Any]
+
+
+@agents_router.post("/scenario-explain", response_model=ScenarioExplainResponse)
+def scenario_explain_endpoint(payload: ScenarioExplainRequest):
+    """Describe what EACH scenario shows and tells, in one batched LLM call.
+
+    Stateless like its scenario-family siblings: the client sends the fans it
+    just received from the forecast; the server derives the narrative facts
+    from those simulated paths (not from a client-side heuristic)."""
+    scenarios_data = [
+        s.model_dump() for s in payload.scenarios if not s.name.startswith("_")
+    ]
+    if not scenarios_data:
+        raise HTTPException(status_code=400, detail="at least one scenario is required")
+    try:
+        explanations, facts, result = scenario_explainer.run(
+            portfolio_name=payload.portfolio_name,
+            portfolio_value=payload.portfolio_value,
+            scenarios=scenarios_data,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"scenario explainer failed: {exc}")
+    # Echo the derived facts (not the raw path arrays) as the grounding record.
+    src_facts = [
+        {k: v for k, v in f.items() if k not in ("discovery",)} | (
+            {"discovery": {
+                "cvar": (f.get("discovery") or {}).get("cvar"),
+                "shock_pcts": (f.get("discovery") or {}).get("shock_pcts"),
+            }} if f.get("discovery") else {}
+        )
+        for f in facts
+    ]
+    return ScenarioExplainResponse(
+        explanations=explanations,
+        disclaimer=DISCLAIMER,
+        cached=result.cached,
+        model=result.model,
+        prompt_tokens=result.prompt_tokens,
+        output_tokens=result.output_tokens,
+        latency_ms=result.latency_ms,
+        source_data={
+            "portfolio_name": payload.portfolio_name,
+            "portfolio_value": payload.portfolio_value,
+            "scenarios": src_facts,
         },
     )
 

@@ -29,10 +29,10 @@ type ScenarioPathsChartProps = {
   height?: number;
 };
 
-const DEFAULT_COLOR = "#7C5CBF";
-const ADVERSARIAL_COLOR = "#B91C1C"; // distinct red for the discovered worst-case
+export const DEFAULT_COLOR = "#7C5CBF";
+export const ADVERSARIAL_COLOR = "#B91C1C"; // distinct red for the discovered worst-case
 
-const DISPLAY_NAMES: Record<string, string> = {
+export const DISPLAY_NAMES: Record<string, string> = {
   worst_case_cvar: "Adversarial worst-case",
   base: "Base",
   bull_10: "Bull +10%",

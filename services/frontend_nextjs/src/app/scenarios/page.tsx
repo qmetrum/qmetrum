@@ -15,6 +15,7 @@ import {
 import { MetricCard } from "@/components/shared/MetricCard";
 import { ScenarioPathsChart } from "@/components/charts/ScenarioPathsChart";
 import { ScenarioSummaryCard } from "@/components/shared/ScenarioSummaryCard";
+import { ScenarioExplainerCard } from "@/components/shared/ScenarioExplainerCard";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
 import {
@@ -70,6 +71,9 @@ export default function ScenariosPage() {
   const [forecastDates, setForecastDates] = useState<string[]>([]);
   const [portfolioValue, setPortfolioValue] = useState(1_000_000);
   const [nlDescription, setNlDescription] = useState("");
+  // Bumped on every completed run — remounts the AI cards so explanations
+  // from a previous scenario set / portfolio never linger next to new results.
+  const [runId, setRunId] = useState(0);
 
   const translateMutation = useMutation({
     mutationFn: (desc: string) => agentsApi.translateScenario(desc),
@@ -153,6 +157,7 @@ export default function ScenariosPage() {
       }
       setResults(flat ?? scenarioLegacy ?? null);
       setFanResults(Object.keys(fans).length > 0 ? fans : null);
+      setRunId((n) => n + 1);
     } catch {
       // handle error silently
     } finally {
@@ -414,6 +419,7 @@ export default function ScenariosPage() {
           {/* AI Executive Summary */}
           {results && comparisonData.length > 0 && (
             <ScenarioSummaryCard
+              key={`summary-${runId}`}
               portfolioName={
                 (portfolios ?? []).find((p: PortfolioResponse) => String(p.portfolio_id) === selectedPortfolio)?.name
                   ?? `Portfolio #${selectedPortfolio}`
@@ -427,6 +433,20 @@ export default function ScenariosPage() {
                 return_pct: c.return,
                 dollar_impact: c.dollarImpact,
               }))}
+            />
+          )}
+
+          {/* AI per-scenario explainer — grounded in the simulated fans */}
+          {fanResults && Object.keys(fanResults).length > 0 && (
+            <ScenarioExplainerCard
+              key={`explainer-${runId}`}
+              portfolioName={
+                (portfolios ?? []).find((p: PortfolioResponse) => String(p.portfolio_id) === selectedPortfolio)?.name
+                  ?? `Portfolio #${selectedPortfolio}`
+              }
+              portfolioValue={portfolioValue}
+              fans={fanResults}
+              scenarios={scenarios}
             />
           )}
 
