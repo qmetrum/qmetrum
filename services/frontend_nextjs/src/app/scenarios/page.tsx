@@ -13,7 +13,12 @@ import {
   type ScenarioFan,
 } from "@/lib/api";
 import { MetricCard } from "@/components/shared/MetricCard";
-import { ScenarioPathsChart } from "@/components/charts/ScenarioPathsChart";
+import {
+  ADVERSARIAL_COLOR,
+  DEFAULT_COLOR,
+  DISPLAY_NAMES,
+  ScenarioPathsChart,
+} from "@/components/charts/ScenarioPathsChart";
 import { ScenarioSummaryCard } from "@/components/shared/ScenarioSummaryCard";
 import { ScenarioExplainerCard } from "@/components/shared/ScenarioExplainerCard";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
@@ -199,17 +204,50 @@ export default function ScenariosPage() {
     });
   }
 
-  // Build comparison chart data
-  const comparisonData = scenarios.map((s) => {
-    const returnPct = (s.shock + s.drift * 9000) || s.shock;
-    const dollarImpact = portfolioValue * (returnPct / 100);
-    return {
-      name: s.name,
-      return: returnPct,
-      dollarImpact,
-      color: s.color,
-    };
-  });
+  // Build comparison chart data. After a run this is grounded in the actual
+  // simulated fans — median (p50) end level per scenario vs the base
+  // scenario's start — the same source as the paths chart, so it reflects the
+  // selected portfolio. Before a run it falls back to a knob-based estimate.
+  const specByName = new Map(scenarios.map((s) => [s.name, s]));
+  const simulated = fanResults != null;
+  const comparisonData = simulated
+    ? Object.entries(fanResults)
+        .filter(
+          ([k, v]) =>
+            !k.startsWith("_") &&
+            v != null &&
+            typeof v === "object" &&
+            Array.isArray((v as ScenarioFan).central) &&
+            (v as ScenarioFan).central.length > 0,
+        )
+        .map(([key, v]) => {
+          const fan = v as ScenarioFan;
+          const baseStart =
+            (fanResults["base"] as ScenarioFan | undefined)?.central?.[0] ?? fan.central[0];
+          const returnPct = baseStart
+            ? (fan.central[fan.central.length - 1] / baseStart - 1) * 100
+            : 0;
+          return {
+            key,
+            name: DISPLAY_NAMES[key] ?? key,
+            return: returnPct,
+            dollarImpact: portfolioValue * (returnPct / 100),
+            color:
+              key === "worst_case_cvar"
+                ? ADVERSARIAL_COLOR
+                : specByName.get(key)?.color ?? DEFAULT_COLOR,
+          };
+        })
+    : scenarios.map((s) => {
+        const returnPct = (s.shock + s.drift * 9000) || s.shock;
+        return {
+          key: s.name,
+          name: s.name,
+          return: returnPct,
+          dollarImpact: portfolioValue * (returnPct / 100),
+          color: s.color,
+        };
+      });
 
   return (
     <div className="space-y-6">
@@ -230,7 +268,13 @@ export default function ScenariosPage() {
             <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Portfolio</label>
             <select
               value={selectedPortfolio}
-              onChange={(e) => setSelectedPortfolio(e.target.value)}
+              onChange={(e) => {
+                setSelectedPortfolio(e.target.value);
+                // Results are per-portfolio — never show another portfolio's
+                // simulation next to the new selection.
+                setResults(null);
+                setFanResults(null);
+              }}
               className="w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--teal)]"
             >
               <option value="">Select portfolio...</option>
@@ -453,11 +497,11 @@ export default function ScenariosPage() {
                   ?? `Portfolio #${selectedPortfolio}`
               }
               portfolioValue={portfolioValue}
-              scenarios={comparisonData.map((c, i) => ({
+              scenarios={comparisonData.map((c) => ({
                 name: c.name,
-                shock_pct: scenarios[i]?.shock,
-                vol_scale: scenarios[i]?.volScale,
-                drift_shift: scenarios[i]?.drift,
+                shock_pct: specByName.get(c.key)?.shock,
+                vol_scale: specByName.get(c.key)?.volScale,
+                drift_shift: specByName.get(c.key)?.drift,
                 return_pct: c.return,
                 dollar_impact: c.dollarImpact,
               }))}
@@ -480,9 +524,14 @@ export default function ScenariosPage() {
 
           {/* Comparison Chart */}
           <div className="q-card p-5">
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-4">
+            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
               Scenario Comparison — Portfolio Impact
             </h2>
+            <p className="text-[10px] text-[var(--text-muted)] mb-3">
+              {simulated
+                ? "Simulated: median (p50) end level per scenario vs the base scenario's start, from the MPS-copula paths for the selected portfolio."
+                : "Estimated from scenario knobs only — run scenarios to get simulated results for the selected portfolio."}
+            </p>
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={comparisonData} layout="vertical" margin={{ left: 100, right: 40 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
@@ -562,7 +611,12 @@ export default function ScenariosPage() {
 
           {/* Dollar Impact */}
           <div className="q-card p-5">
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Dollar Impact</h2>
+            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1">Dollar Impact</h2>
+            <p className="text-[10px] text-[var(--text-muted)] mb-3">
+              {simulated
+                ? "Simulated median outcome × portfolio value."
+                : "Knob-based estimate × portfolio value — run scenarios to simulate."}
+            </p>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
               {comparisonData.map((s, i) => (
                 <div key={`${s.name}-${i}`} className="rounded-lg bg-[var(--content-bg)] px-4 py-3">
