@@ -165,9 +165,12 @@ export default function ScenariosPage() {
           if (j.job?.status === "failed") {
             throw new Error(j.job?.error_message || j.error || "Scenario computation failed on the server");
           }
-          if (Date.now() - t0 > 15 * 60_000) {
+          // Keep polling while the server says the job is alive — the backend
+          // reaps orphans on restart, so "running" is trustworthy. The cap is
+          // only a backstop against a crash-looping server.
+          if (Date.now() - t0 > 45 * 60_000) {
             throw new Error(
-              "Still computing after 15 minutes — the job keeps running server-side; hit Run again in a bit to re-attach.",
+              "Gave up waiting after 45 minutes — the job may still be running server-side; hit Run later to re-attach.",
             );
           }
         }
@@ -503,8 +506,9 @@ export default function ScenariosPage() {
             </button>
             {running && runProgress && (
               <p className="text-[10px] text-[var(--text-muted)]">
-                First run after new market data retrains asset forecasts and can take several
-                minutes; reruns are fast. The job keeps running server-side even if you leave.
+                First run after new market data retrains asset forecasts and can take 20-30
+                minutes for larger portfolios; reruns are fast. The job keeps running
+                server-side even if you leave — hitting Run later re-attaches to it.
               </p>
             )}
             {runError && !running && (
