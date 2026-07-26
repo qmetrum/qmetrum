@@ -92,3 +92,31 @@ router, styles, helpers, and frontend consumers. Verified adversarially.
 - **E. Year-end**: real walk-forward model accuracy; real values or omit; AI year-ahead grounded + disclaimed; fix alpha label.
 - **F. Onboarding**: reframe recommendation honestly (rebalancing suggestions or current-only); UI inputs for risk tolerance.
 - **G. Frontend**: send real values/run data; no silent catches; disable buttons lacking real inputs.
+
+## Status 2026-07-27: phases A-F DONE (all five templates honest + narrative layer)
+
+All five reports now: real data or honest omission, AI narrative layer
+(report_narrator agents, grounded + disclaimed, options-to-evaluate framing),
+zero em/en dashes. 77 report tests passing; all five PDFs build.
+
+Open residuals (small):
+- Portfolio-linked quarterly endpoint still defaults advisor_name/firm_name to
+  placeholders via Query defaults (report_router.py ~L1442).
+- report_data_helpers.py ~L262: months with no vol snapshots padded with
+  fragility 1.0 drawn as real observations in the year-end risk chart.
+- Rebalancing before/after chart draws a 0.0 bar when VaR is unavailable
+  (upstream now passes None; chart could annotate 'n/a' instead).
+
+## Phase G (frontend) still open
+- reports/clients pages send proposed_assets == current_assets (rebalancing
+  needs a proposed-allocation input; PDF now honestly says "essentially
+  unchanged").
+- Market-event UI must supply a real event_name/event_date (backend now 400s
+  on dates outside history instead of faking a window).
+- Onboarding risk_tolerance/target_vol now REQUIRED (both pages already send
+  them); clients page still hardcodes Moderate/0.10 with no input UI.
+- Year-end: portfolio_value_start optional (omits dollars when absent); new
+  optional proposed_changes field has no UI; endpoint 400s when review_year
+  has no price data.
+- Silent catch {} around PDF downloads; scenarios/quarterly should pass the
+  run's scenarios (done for scenarios page); portfolioValue default 1M input.

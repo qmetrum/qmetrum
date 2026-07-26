@@ -38,14 +38,11 @@ from app.logic.portfolio_logic import PortfolioManager
 from app.services.market_store import get_price_series_cached, get_fundamentals_cached
 from app.services.risk_client import calculate_risk
 from app.db.database import engine
-from app.db.models import User, Portfolio, Position, PortfolioReportDataCache
+from app.db.models import (
+    User, Portfolio, Position, PortfolioReportDataCache, AssetVolatilitySnapshot,
+)
 from app.agents import report_narrator, scenario_explainer
 from app.reports.report_data_helpers import (
-    compute_asset_contributions,
-    compute_monthly_benchmark_returns,
-    compute_monthly_fragility,
-    compute_monthly_returns,
-    compute_monthly_vol,
     compute_portfolio_beta,
     get_benchmark_series,
     get_benchmark_series_labeled,
@@ -145,7 +142,12 @@ class RebalancingReportRequest(BaseModel):
     proposed_scenarios: Optional[List[ReportScenarioItem]] = None
 
 class YearEndReportRequest(BaseModel):
-    """Annual performance review."""
+    """Annual performance review.
+
+    portfolio_value_start/_end are optional REAL dollar values from the
+    advisor's records; dollar figures are omitted from the PDF when absent
+    (never invented, never derived by assuming zero flows). proposed_changes
+    are advisor-authored adjustments passed through verbatim."""
     client_name: str
     advisor_name: str
     firm_name: str
@@ -153,6 +155,7 @@ class YearEndReportRequest(BaseModel):
     review_year: int = 2025
     portfolio_value_start: Optional[float] = None
     portfolio_value_end: Optional[float] = None
+    proposed_changes: Optional[List[str]] = None
 
 
 # ────────────────────────────────────────────────────────────
@@ -430,8 +433,10 @@ def _fetch_portfolio_data(assets: List[ReportAsset], horizon_days: int = 90, por
             "sortino_ratio": perf.get("sortino_ratio", 0.0),
             "max_drawdown": perf.get("max_drawdown", 0.0),
             "annualized_vol": perf.get("annualized_volatility", 0.0),
-            "var_95_daily": risk_metrics.get("var_95", -0.02),
-            "cvar_95_daily": risk_metrics.get("cvar_95", -0.03),
+            # None when the risk engine returned nothing: templates render
+            # n/a rather than an invented default.
+            "var_95_daily": risk_metrics.get("var_95"),
+            "cvar_95_daily": risk_metrics.get("cvar_95"),
             "beta": beta,
             "fragility_score": unbox(risk_data.get("fragility_score_latest", 1.0)),
             "regime": str(risk_data.get("regime_latest", "Normal")),
@@ -459,53 +464,194 @@ def _pdf_response(filepath: str, filename: str) -> StreamingResponse:
     )
 
 
-def _compute_yearend_vol(data: dict, year: int) -> List[float]:
-    """Compute monthly realized vol from portfolio daily prices."""
+def _build_review_year_prices(data: dict, year: int) -> pd.Series:
+    """Daily portfolio prices covering the review year: prefer the MarketData
+    table, fall back to the price frames already fetched for this report.
+    Returns an empty series when neither source has real data."""
+    start, end = datetime(year, 1, 1), datetime(year, 12, 31)
     try:
         with Session(engine) as session:
             port_daily, _ = build_portfolio_daily_prices(
-                data["tickers"], data["weights"],
-                datetime(year, 1, 1), datetime(year, 12, 31),
-                session,
+                data["tickers"], data["weights"], start, end, session,
             )
-            return compute_monthly_vol(port_daily, year)
+        if len(port_daily) >= 2:
+            return port_daily
     except Exception as e:
-        logger.warning(f"Vol computation failed: {e}")
-        return [0.0] * 12
+        logger.warning(f"MarketData portfolio series failed for {year}: {e}")
+
+    frames = {}
+    for ticker, df in (data.get("price_data") or {}).items():
+        if df is None or not len(df):
+            continue
+        s = df.copy()
+        s["date"] = pd.to_datetime(s["date"])
+        mask = (s["date"] >= pd.Timestamp(start)) & (s["date"] <= pd.Timestamp(end))
+        s = s[mask].sort_values("date")
+        if len(s) >= 2:
+            frames[ticker] = s.set_index("date")["price"]
+    if not frames:
+        return pd.Series(dtype=float)
+    all_dates = pd.DatetimeIndex(
+        sorted(set().union(*[set(s.index) for s in frames.values()]))
+    )
+    port_returns = pd.Series(0.0, index=all_dates)
+    for ticker, s in frames.items():
+        aligned = s.reindex(all_dates, method="ffill")
+        port_returns += aligned.pct_change().fillna(0) * data["weights"].get(ticker, 0.0)
+    return (1 + port_returns).cumprod() * 100
 
 
-def _compute_yearend_fragility(data: dict, year: int) -> List[float]:
-    """Compute monthly fragility from AssetVolatilitySnapshot."""
+def _monthly_returns_or_none(daily_prices, year: int) -> List[Optional[float]]:
+    """12 monthly returns; months with fewer than 2 observations are None,
+    never a silent 0.0 rendered as a real month."""
+    out: List[Optional[float]] = []
+    for month in range(1, 13):
+        if daily_prices is None or len(daily_prices) < 2:
+            out.append(None)
+            continue
+        mask = (daily_prices.index.year == year) & (daily_prices.index.month == month)
+        month_prices = daily_prices[mask]
+        if len(month_prices) >= 2 and float(month_prices.iloc[0]) > 0:
+            out.append(float(month_prices.iloc[-1] / month_prices.iloc[0] - 1))
+        else:
+            out.append(None)
+    return out
+
+
+def _coverage_run(monthly: List[Optional[float]]) -> List[int]:
+    """Indices of the first contiguous run of real monthly returns. A gap
+    after data begins ends the run: chaining a period return across unknown
+    months would be an invented number."""
+    first = next((i for i, r in enumerate(monthly) if r is not None), None)
+    if first is None:
+        return []
+    stop = first
+    while stop < len(monthly) and monthly[stop] is not None:
+        stop += 1
+    return list(range(first, stop))
+
+
+def _cumulative_pct(monthly: List[Optional[float]], cov: List[int]) -> List[Optional[float]]:
+    """Cumulative % return per month over the covered run; None elsewhere."""
+    out: List[Optional[float]] = [None] * len(monthly)
+    running = 1.0
+    for i in cov:
+        running *= 1.0 + float(monthly[i])
+        out[i] = (running - 1.0) * 100.0
+    return out
+
+
+def _compute_yearend_vol(port_daily, year: int) -> List[Optional[float]]:
+    """Monthly realized vol (annualized %) from the review-year daily prices.
+    Months with fewer than 5 return observations are None, never a 0.0
+    rendered as a calm month."""
+    if port_daily is None or len(port_daily) < 2:
+        return [None] * 12
+    returns = port_daily.pct_change().dropna()
+    out: List[Optional[float]] = []
+    for month in range(1, 13):
+        mask = (returns.index.year == year) & (returns.index.month == month)
+        month_returns = returns[mask]
+        if len(month_returns) >= 5:
+            out.append(float(month_returns.std() * np.sqrt(252) * 100))
+        else:
+            out.append(None)
+    return out
+
+
+def _compute_yearend_fragility(data: dict, year: int) -> List[Optional[float]]:
+    """Monthly portfolio-weighted fragility from AssetVolatilitySnapshot.
+    Months with no snapshot coverage are None (omitted from the chart), never
+    a neutral 1.0 rendered as a real observation."""
+    out: List[Optional[float]] = []
     try:
         with Session(engine) as session:
-            return compute_monthly_fragility(
-                session, data["tickers"], data["weights"], year,
-            )
+            for month in range(1, 13):
+                month_start = datetime(year, month, 1)
+                month_end = (datetime(year + 1, 1, 1) if month == 12
+                             else datetime(year, month + 1, 1))
+                weighted, total_weight = 0.0, 0.0
+                for ticker in data["tickers"]:
+                    weight = data["weights"].get(ticker, 0.0)
+                    if weight <= 0:
+                        continue
+                    snapshot = session.exec(
+                        select(AssetVolatilitySnapshot)
+                        .where(AssetVolatilitySnapshot.symbol == ticker)
+                        .where(AssetVolatilitySnapshot.as_of >= month_start)
+                        .where(AssetVolatilitySnapshot.as_of < month_end)
+                        .order_by(AssetVolatilitySnapshot.as_of.desc())
+                    ).first()
+                    if snapshot and snapshot.fragility_score_latest is not None:
+                        weighted += snapshot.fragility_score_latest * weight
+                        total_weight += weight
+                out.append(weighted / total_weight if total_weight > 0 else None)
     except Exception as e:
         logger.warning(f"Fragility computation failed: {e}")
-        return [1.0] * 12
+        return [None] * 12
+    return out
 
 
-def _compute_top_contributors(data: dict, assets: List, year: int, top: bool = True) -> List[Dict]:
-    """Compute top or bottom asset contributors by YTD return."""
-    price_data = data.get("price_data", {})
+def _real_model_accuracy(data: dict) -> Optional[dict]:
+    """REAL walk-forward validation figures for the winning model, or None.
+    Sources: forecast_result.forecast_quality (the engine's own summary for
+    the winner), then model_validation.quality_per_model. Never a hardcoded
+    number: when neither source has finite figures the report omits the model
+    performance section entirely."""
+    def _finite(x):
+        try:
+            return x is not None and np.isfinite(float(x))
+        except (TypeError, ValueError):
+            return False
+
+    candidates = []
+    fq = (data.get("forecast_result") or {}).get("forecast_quality")
+    if isinstance(fq, dict):
+        candidates.append(fq)
+    model = str(data.get("model_used") or "")
+    quality = (data.get("model_validation") or {}).get("quality_per_model") or {}
+    if isinstance(quality.get(model), dict):
+        candidates.append(dict(quality[model], model=model))
+    for c in candidates:
+        da, mape = c.get("directional_accuracy"), c.get("mape")
+        n = c.get("n_validation_steps")
+        if _finite(da) and _finite(mape) and n and int(n) > 0:
+            return {
+                "hit_rate": float(da),
+                "avg_error": float(mape),
+                "n_steps": int(n),
+                "best_model": str(c.get("model") or model or "unknown"),
+            }
+    return None
+
+
+def _compute_top_contributors(data: dict, year: int, top: bool = True) -> List[Dict]:
+    """Top/bottom contributors by weighted contribution over the review year.
+    Holdings with no price data inside the year are dropped, never shown as
+    0.0% observations."""
+    start = pd.Timestamp(datetime(year, 1, 1))
+    end = pd.Timestamp(datetime(year, 12, 31))
     weights = data.get("weights", {})
-    start = datetime(year, 1, 1)
-    end = datetime(year, 12, 31)
 
-    contributions = compute_asset_contributions(price_data, weights, start, end)
-
-    # Enrich with names from fundamentals
-    for c in contributions:
-        ticker = c["ticker"]
-        c["name"] = data["fundamentals"].get(ticker, {}).get("profile", {}).get("name", ticker)
-
-    if top:
-        # Top 3 by contribution
-        return contributions[:3]
-    else:
-        # Bottom 2 by contribution
-        return contributions[-2:] if len(contributions) >= 2 else contributions
+    rows = []
+    for ticker, df in (data.get("price_data") or {}).items():
+        if df is None or not len(df):
+            continue
+        s = df.copy()
+        s["date"] = pd.to_datetime(s["date"])
+        period = s[(s["date"] >= start) & (s["date"] <= end)].sort_values("date")
+        if len(period) < 2 or float(period["price"].iloc[0]) <= 0:
+            continue
+        ret = float(period["price"].iloc[-1] / period["price"].iloc[0] - 1)
+        rows.append({
+            "ticker": ticker,
+            "name": data["fundamentals"].get(ticker, {}).get("profile", {}).get("name", ticker),
+            "return": ret,
+            "contribution": ret * weights.get(ticker, 0.0),
+        })
+    rows.sort(key=lambda r: r["contribution"], reverse=True)
+    # Top 3; bottom 2 drawn only from holdings not already shown as top.
+    return rows[:3] if top else rows[3:][-2:]
 
 
 def _compute_holdings_impact(data: dict, assets: List, window_start: datetime,
@@ -1134,70 +1280,155 @@ def generate_year_end(
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"yearend_{report_id}.pdf")
     report_date = datetime.utcnow()
+    year = payload.review_year
+
+    # Dollar values are optional and rendered only when actually supplied: the
+    # report never invents an AUM and never derives an ending value by
+    # assuming zero flows over the year.
+    def _positive_or_none(v):
+        try:
+            return float(v) if v is not None and float(v) > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    value_start = _positive_or_none(payload.portfolio_value_start)
+    value_end = _positive_or_none(payload.portfolio_value_end)
 
     data = _fetch_portfolio_data(payload.assets, horizon_days=90)
     rm = data["risk_metrics"]
 
     months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
 
-    # Compute real monthly returns from portfolio daily prices
-    with Session(engine) as session:
-        port_daily, port_dates = build_portfolio_daily_prices(
-            data["tickers"], data["weights"],
-            datetime(payload.review_year, 1, 1),
-            datetime(payload.review_year, 12, 31),
-            session,
-        )
-        monthly_returns = compute_monthly_returns(port_daily, payload.review_year)
-        bench_monthly = compute_monthly_benchmark_returns(
-            DEFAULT_BENCHMARK, payload.review_year, session,
+    # REAL review-year monthly series; months without data stay None, and the
+    # endpoint refuses to fabricate a review when no month has data.
+    port_daily = _build_review_year_prices(data, year)
+    monthly_returns = _monthly_returns_or_none(port_daily, year)
+    cov = _coverage_run(monthly_returns)
+    if not cov:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"No portfolio price data is available for {year}: "
+                    "the report will not fabricate a year in review."),
         )
 
-    port_cum = ((np.cumprod(1 + monthly_returns) - 1) * 100).tolist()
-    bench_cum = ((np.cumprod(1 + bench_monthly) - 1) * 100).tolist()
+    # Benchmark: labeled with whichever symbol actually supplied the data, and
+    # omitted entirely unless it covers every month the portfolio covers.
+    bench_monthly: Optional[List[Optional[float]]] = None
+    bench_label = None
+    try:
+        with Session(engine) as session:
+            bench_df, bench_symbol = get_benchmark_series_labeled(
+                DEFAULT_BENCHMARK, datetime(year, 1, 1), datetime(year, 12, 31), session,
+            )
+        if bench_symbol and not bench_df.empty:
+            closes = (bench_df.assign(date=pd.to_datetime(bench_df["date"]))
+                      .sort_values("date").set_index("date")["close"])
+            bench_monthly = _monthly_returns_or_none(closes, year)
+            bench_label = BENCHMARK_LABELS.get(bench_symbol, bench_symbol)
+    except Exception as e:
+        logger.warning(f"Benchmark unavailable for year-end report: {e}")
+    if bench_monthly is None or any(bench_monthly[i] is None for i in cov):
+        bench_monthly = None
+        bench_label = None
 
-    ytd_return = float(np.prod(1 + monthly_returns) - 1)
-    bench_ytd = float(np.prod(1 + bench_monthly) - 1)
+    ytd_return = float(np.prod([1 + monthly_returns[i] for i in cov]) - 1)
+    port_cum = _cumulative_pct(monthly_returns, cov)
+    bench_ytd = None
+    bench_cum = None
+    if bench_monthly is not None:
+        bench_ytd = float(np.prod([1 + bench_monthly[i] for i in cov]) - 1)
+        bench_cum = _cumulative_pct(bench_monthly, cov)
+
+    full_year = cov == list(range(12))
+    coverage_label = (
+        f"January to December {year}" if full_year else
+        f"{datetime(year, cov[0] + 1, 1).strftime('%B')} to "
+        f"{datetime(year, cov[-1] + 1, 1).strftime('%B')} {year}"
+    )
+    metrics_window_label = (
+        f"engine's trailing two-year analysis window ending "
+        f"{report_date.strftime('%B %d, %Y')}"
+    )
+
+    vol_series = _compute_yearend_vol(port_daily, year)
+    fragility_series = _compute_yearend_fragility(data, year)
+    model_accuracy = _real_model_accuracy(data)
+    top_contributors = _compute_top_contributors(data, year, top=True)
+    bottom_contributors = _compute_top_contributors(data, year, top=False)
+
+    # Narrative layer: how the year actually went, honest model commentary
+    # only when real walk-forward figures exist, and a year-ahead grounded in
+    # the current regime. Unavailable -> numbers-only report, never canned
+    # macro themes.
+    narrative = None
+    try:
+        narrative, _ = report_narrator.run_yearend(facts={
+            "portfolio_name": payload.client_name,
+            "review_year": year,
+            "portfolio_value_start": value_start,
+            "portfolio_value_end": value_end,
+            "return_period": ytd_return,
+            "coverage_label": coverage_label,
+            "benchmark": ({"label": bench_label, "return_period": bench_ytd}
+                          if bench_ytd is not None else None),
+            "monthly_returns": [
+                {"month": months[i], "return": monthly_returns[i]} for i in cov
+            ],
+            "risk_metrics": {
+                "annualized_vol": rm["annualized_vol"],
+                "sharpe": rm["sharpe_ratio"],
+                "sortino": rm["sortino_ratio"],
+                "max_drawdown": rm["max_drawdown"],
+                "regime": rm["regime"],
+                "fragility_score": rm["fragility_score"],
+            },
+            "metrics_window": metrics_window_label,
+            "vol_series": [{"month": months[i], "vol": v}
+                           for i, v in enumerate(vol_series) if v is not None],
+            "fragility_series": [{"month": months[i], "fragility": f}
+                                 for i, f in enumerate(fragility_series) if f is not None],
+            "model_accuracy": model_accuracy,
+            "top_contributors": top_contributors,
+            "bottom_contributors": bottom_contributors,
+        })
+    except Exception as e:
+        logger.warning(f"Year-end narrative unavailable: {e}")
 
     template_data = {
         "client_name": payload.client_name,
         "advisor_name": payload.advisor_name,
         "firm_name": payload.firm_name,
         "report_date": report_date,
-        "review_year": payload.review_year,
-        "portfolio_value_start": _require_portfolio_value(payload.portfolio_value_start, "portfolio_value_start"),
-        "portfolio_value_end": (float(payload.portfolio_value_end) if payload.portfolio_value_end else _require_portfolio_value(payload.portfolio_value_start, "portfolio_value_start") * (1 + ytd_return)),
+        "review_year": year,
+        "portfolio_value_start": value_start,
+        "portfolio_value_end": value_end,
         "portfolio_return_ytd": ytd_return,
+        "coverage_label": coverage_label,
+        "full_year": full_year,
         "benchmark_return_ytd": bench_ytd,
+        "benchmark_label": bench_label,
         "sharpe": rm["sharpe_ratio"],
         "sortino": rm["sortino_ratio"],
         "max_drawdown": rm["max_drawdown"],
         "annualized_vol": rm["annualized_vol"],
+        "metrics_window_label": metrics_window_label,
+        "regime": rm["regime"],
+        "fragility_score": rm["fragility_score"],
         "months": months,
         "portfolio_cumulative": port_cum,
         "benchmark_cumulative": bench_cum,
-        "monthly_returns": monthly_returns.tolist(),
-        "vol_series": _compute_yearend_vol(data, payload.review_year),
-        "fragility_series": _compute_yearend_fragility(data, payload.review_year),
-        "model_accuracy": {
-            "hit_rate": 0.72,
-            "avg_error": 0.034,
-            "best_model": data.get("model_used", "Prophet"),
-        },
-        "top_contributors": _compute_top_contributors(data, payload.assets, payload.review_year, top=True),
-        "bottom_contributors": _compute_top_contributors(data, payload.assets, payload.review_year, top=False),
-        "year_ahead_themes": [
-            "Monitor rate environment and adjust duration positioning accordingly.",
-            "Evaluate increasing international diversification if valuations remain attractive.",
-            "Maintain inflation protection through TIPS and commodity allocations.",
-        ],
-        "proposed_changes": [
-            "Review allocation quarterly and rebalance when drift exceeds 3%.",
-        ],
+        "monthly_returns": monthly_returns,
+        "vol_series": vol_series,
+        "fragility_series": fragility_series,
+        "model_accuracy": model_accuracy,
+        "top_contributors": top_contributors,
+        "bottom_contributors": bottom_contributors,
+        "narrative": narrative,
+        "proposed_changes": payload.proposed_changes,
     }
 
     generate_yearend_report(output_path, template_data)
-    filename = f"yearend_{payload.review_year}_{payload.client_name.replace(' ', '_')}.pdf"
+    filename = f"yearend_{year}_{payload.client_name.replace(' ', '_')}.pdf"
     return _pdf_response(output_path, filename)
 
 

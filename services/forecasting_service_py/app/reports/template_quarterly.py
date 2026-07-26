@@ -170,7 +170,10 @@ def generate_quarterly_report(output_path, data):
             "mc_lower": [...], "mc_upper": [...],
             ...
         },
-        "scenarios": [{"name","return_12m","drawdown","prob","color"}],
+        "scenarios": [{"name","is_base","return_pct","dollar_impact",
+                       "downside_pct","band_pct"}],  # real simulated facts
+        "scenario_analysis": {"summary", "explanations"} | None,
+        "narrative": {...} | None,
     }
     """
     d = data
