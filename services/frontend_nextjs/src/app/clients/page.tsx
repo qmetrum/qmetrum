@@ -7,9 +7,7 @@ import { useBranding } from "@/components/providers/BrandingProvider";
 import {
   portfolioApi,
   portfolioListApi,
-  reportsApi,
   type PortfolioResponse,
-  type ReportAsset,
 } from "@/lib/api";
 
 type NewPortfolio = {
@@ -33,7 +31,6 @@ export default function ClientsPage() {
     name: "",
     assets: [{ ticker: "", weight: "" }],
   });
-  const [generating, setGenerating] = useState<string | null>(null);
 
   const { data: portfolios, isLoading } = useQuery({
     queryKey: ["portfolios-list"],
@@ -69,53 +66,6 @@ export default function ClientsPage() {
     const assets = [...newPortfolio.assets];
     assets[i] = { ...assets[i], [field]: val };
     setNewPortfolio({ ...newPortfolio, assets });
-  }
-
-  async function generateReport(p: PortfolioResponse, type: string) {
-    setGenerating(`${p.portfolio_id}-${type}`);
-    const assets: ReportAsset[] = (p.assets ?? []).map((a) => ({
-      ticker: a.ticker,
-      weight: a.weight ?? 0,
-    }));
-    const base = {
-      client_name: p.name ?? `Portfolio #${p.portfolio_id}`,
-      advisor_name: branding.advisorName,
-      firm_name: branding.firmName,
-      assets,
-    };
-    try {
-      switch (type) {
-        case "quarterly":
-          await reportsApi.quarterly(base);
-          break;
-        case "onboarding":
-          await reportsApi.onboarding({ ...base, risk_tolerance: "Moderate", target_vol: 0.10 });
-          break;
-        case "market-event":
-          await reportsApi.marketEvent({
-            ...base,
-            event_name: "Market Event",
-            event_date: new Date().toISOString().split("T")[0],
-            event_summary: "Market turbulence event analysis.",
-          });
-          break;
-        case "rebalancing":
-          await reportsApi.rebalancing({
-            ...base,
-            current_assets: assets,
-            proposed_assets: assets,
-            rationale: "Periodic rebalancing review.",
-          });
-          break;
-        case "year-end":
-          await reportsApi.yearEnd({ ...base, review_year: new Date().getFullYear() - 1 });
-          break;
-      }
-    } catch {
-      // handle silently
-    } finally {
-      setGenerating(null);
-    }
   }
 
   return (
@@ -226,16 +176,18 @@ export default function ClientsPage() {
                 <span className="text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
                   Generate Report
                 </span>
+                {/* Reports need real inputs (value, event details, proposed
+                    weights), so route to the Report Center preconfigured
+                    instead of firing invented payloads from here. */}
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {REPORT_TYPES.map((rt) => (
-                    <button
+                    <Link
                       key={rt.key}
-                      onClick={() => generateReport(p, rt.key)}
-                      disabled={generating === `${p.portfolio_id}-${rt.key}`}
-                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--content-bg)] disabled:opacity-50 transition-colors"
+                      href={`/reports?portfolio=${p.portfolio_id}&type=${rt.key}`}
+                      className="rounded-md border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--content-bg)] transition-colors"
                     >
-                      {generating === `${p.portfolio_id}-${rt.key}` ? "..." : rt.label}
-                    </button>
+                      {rt.label}
+                    </Link>
                   ))}
                 </div>
               </div>

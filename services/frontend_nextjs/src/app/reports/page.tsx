@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   reportsApi,
@@ -64,20 +64,68 @@ export default function ReportsPage() {
   const [eventDate, setEventDate] = useState("");
   const [eventSummary, setEventSummary] = useState("");
   const [rationale, setRationale] = useState("");
+  const [taxNotes, setTaxNotes] = useState("");
   const [reviewYear, setReviewYear] = useState(String(new Date().getFullYear() - 1));
+  const [valueStart, setValueStart] = useState("");
+  const [valueEnd, setValueEnd] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  // Rebalancing: proposed allocation as editable percents, keyed by ticker.
+  const [proposedWeights, setProposedWeights] = useState<Record<string, string>>({});
 
   const { data: portfolios } = useQuery({
     queryKey: ["portfolios-list"],
     queryFn: portfolioListApi.list,
   });
 
+  // Preselect from /reports?portfolio=..&type=.. (links on the Clients page).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const pid = params.get("portfolio");
+    const type = params.get("type");
+    if (pid) setPortfolioId(pid);
+    if (type && REPORT_TYPES.some((r) => r.key === type)) setSelected(type);
+  }, []);
+
   const selectedPortfolio = (portfolios ?? []).find(
     (p: PortfolioResponse) => String(p.portfolio_id) === portfolioId
   );
 
+  // Seed the proposed allocation from the current one whenever the portfolio
+  // changes; the advisor then edits the targets.
+  useEffect(() => {
+    if (!selectedPortfolio) return;
+    setProposedWeights(
+      Object.fromEntries(
+        (selectedPortfolio.assets ?? []).map((a) => [
+          a.ticker,
+          ((a.weight ?? 0) * 100).toFixed(1),
+        ]),
+      ),
+    );
+  }, [selectedPortfolio]);
+
+  const proposedSum = Object.values(proposedWeights).reduce(
+    (acc, v) => acc + (parseFloat(v) || 0), 0);
+  const proposedChanged = (selectedPortfolio?.assets ?? []).some(
+    (a) => Math.abs((parseFloat(proposedWeights[a.ticker] ?? "0") || 0) - (a.weight ?? 0) * 100) > 0.05,
+  );
+
+  // Per-type required inputs; the backend refuses to fabricate missing ones.
+  const missingInputs: string[] = [];
+  if (!portfolioId) missingInputs.push("portfolio");
+  if (selected !== "year-end" && !(Number(portfolioValue) > 0)) missingInputs.push("portfolio value");
+  if (selected === "market-event") {
+    if (!eventName.trim()) missingInputs.push("event name");
+    if (!eventDate) missingInputs.push("event date");
+    if (!eventSummary.trim()) missingInputs.push("event summary");
+  }
+  if (selected === "onboarding" && !(parseFloat(targetVol) > 0)) missingInputs.push("target vol");
+  if (selected === "rebalancing" && !(proposedSum > 0)) missingInputs.push("proposed weights");
+
   async function generate() {
-    if (!selected || !selectedPortfolio) return;
+    if (!selected || !selectedPortfolio || missingInputs.length > 0) return;
     setGenerating(true);
+    setError(null);
 
     const assets: ReportAsset[] = (selectedPortfolio.assets ?? []).map((a) => ({
       ticker: a.ticker,
@@ -115,19 +163,43 @@ export default function ReportsPage() {
           await reportsApi.rebalancing({
             ...base,
             current_assets: assets,
-            proposed_assets: assets,
+            proposed_assets: assets.map((a) => ({
+              ticker: a.ticker,
+              weight: (parseFloat(proposedWeights[a.ticker] ?? "0") || 0) / 100,
+            })),
             rationale,
+            ...(taxNotes.trim() ? { tax_considerations: taxNotes } : {}),
           });
           break;
         case "year-end":
           await reportsApi.yearEnd({
-            ...base,
+            client_name: base.client_name,
+            advisor_name: base.advisor_name,
+            firm_name: base.firm_name,
+            assets,
             review_year: parseInt(reviewYear),
+            ...(Number(valueStart) > 0 ? { portfolio_value_start: Number(valueStart) } : {}),
+            ...(Number(valueEnd) > 0 ? { portfolio_value_end: Number(valueEnd) } : {}),
           });
           break;
       }
-    } catch {
-      // handle silently
+    } catch (e) {
+      // The backend refuses to fabricate missing data; show its reason.
+      const err = e as { response?: { data?: unknown }; message?: string };
+      let detail: unknown;
+      const data = err.response?.data;
+      if (data instanceof Blob) {
+        try { detail = JSON.parse(await data.text())?.detail; } catch { /* not JSON */ }
+      } else if (data && typeof data === "object") {
+        detail = (data as { detail?: unknown }).detail;
+      }
+      setError(
+        typeof detail === "string"
+          ? detail
+          : Array.isArray(detail)
+            ? String((detail[0] as { msg?: string } | undefined)?.msg ?? "Invalid request")
+            : err.message ?? "Report generation failed",
+      );
     } finally {
       setGenerating(false);
     }
@@ -246,25 +318,85 @@ export default function ReportsPage() {
           )}
 
           {selected === "rebalancing" && (
-            <div>
-              <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Rebalancing Rationale</label>
-              <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} rows={3} className={inputCls} placeholder="Why rebalance now..." />
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+                  Proposed Allocation (%)
+                </label>
+                {!selectedPortfolio ? (
+                  <p className="text-xs text-[var(--text-muted)]">Select a portfolio to edit the target weights.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {(selectedPortfolio.assets ?? []).map((a) => (
+                      <div key={a.ticker} className="flex items-center gap-3">
+                        <span className="w-16 text-xs font-semibold text-[var(--text-primary)]">{a.ticker}</span>
+                        <span className="w-24 text-[11px] text-[var(--text-muted)]">
+                          current {((a.weight ?? 0) * 100).toFixed(1)}%
+                        </span>
+                        <input
+                          type="number"
+                          step="0.5"
+                          min="0"
+                          value={proposedWeights[a.ticker] ?? ""}
+                          onChange={(e) =>
+                            setProposedWeights((prev) => ({ ...prev, [a.ticker]: e.target.value }))
+                          }
+                          className={`${inputCls} max-w-[110px]`}
+                        />
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-[var(--text-muted)]">
+                      Total {proposedSum.toFixed(1)}%
+                      {Math.abs(proposedSum - 100) > 2 ? " (weights are normalized to 100%)" : ""}
+                      {!proposedChanged ? " · identical to current: the report will honestly say the proposal changes essentially nothing" : ""}
+                    </p>
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Rebalancing Rationale</label>
+                <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} rows={3} className={inputCls} placeholder="Why rebalance now..." />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Tax Considerations (optional)</label>
+                <textarea value={taxNotes} onChange={(e) => setTaxNotes(e.target.value)} rows={2} className={inputCls} placeholder="e.g. harvesting losses in taxable account..." />
+              </div>
             </div>
           )}
 
           {selected === "year-end" && (
-            <div className="max-w-[200px]">
-              <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Review Year</label>
-              <input value={reviewYear} onChange={(e) => setReviewYear(e.target.value)} type="number" className={inputCls} />
+            <div className="grid gap-4 sm:grid-cols-3">
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Review Year</label>
+                <input value={reviewYear} onChange={(e) => setReviewYear(e.target.value)} type="number" className={inputCls} />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Start Value ($, optional)</label>
+                <input value={valueStart} onChange={(e) => setValueStart(e.target.value)} type="number" className={inputCls} placeholder="omit to skip $ figures" />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">End Value ($, optional)</label>
+                <input value={valueEnd} onChange={(e) => setValueEnd(e.target.value)} type="number" className={inputCls} />
+              </div>
             </div>
           )}
 
+          {error && (
+            <div className="rounded-lg bg-[var(--coral-light)] px-3 py-2 text-xs text-[var(--coral)]">
+              Report generation failed: {error}
+            </div>
+          )}
+          {missingInputs.length > 0 && (
+            <p className="text-[11px] text-[var(--text-muted)]">
+              Required before generating: {missingInputs.join(", ")}. Reports never invent missing data.
+            </p>
+          )}
           <button
             onClick={generate}
-            disabled={!portfolioId || generating}
+            disabled={missingInputs.length > 0 || generating}
             className="rounded-lg bg-[var(--teal)] px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
-            {generating ? "Generating PDF..." : "Generate & Download PDF"}
+            {generating ? "Generating PDF... (can take a minute)" : "Generate & Download PDF"}
           </button>
         </div>
       )}

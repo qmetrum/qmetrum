@@ -120,3 +120,16 @@ Open residuals (small):
   has no price data.
 - Silent catch {} around PDF downloads; scenarios/quarterly should pass the
   run's scenarios (done for scenarios page); portfolioValue default 1M input.
+
+
+## Phase G DONE (2026-07-27)
+- Clients page: fabricated one-click report payloads replaced by links to the
+  Report Center preconfigured via /reports?portfolio=..&type=..
+- Report Center: proposed-allocation editor for rebalancing (seeded from
+  current, live total, normalization + "essentially unchanged" notices), tax
+  considerations input, year-end start/end value fields (optional, honest
+  omission), per-type required-input gating ("reports never invent missing
+  data"), error banner surfacing backend refusals (Blob-aware detail parsing).
+Remaining nits: portfolio-value input still displayed for year-end though
+unused; portfolio-linked quarterly Query placeholder defaults; fragility 1.0
+padding in year-end risk chart; rebalancing chart 0.0 bar when VaR is None.
