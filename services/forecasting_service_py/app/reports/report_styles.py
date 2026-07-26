@@ -1,5 +1,5 @@
 """
-report_styles.py — Shared brand tokens, styles, and helpers for all PDF reports.
+report_styles.py: Shared brand tokens, styles, and helpers for all PDF reports.
 Import this in every template so branding stays consistent.
 """
 
@@ -258,7 +258,7 @@ def standard_disclaimer(firm_name, advisor_name):
             s_disclaimer,
         ),
         Paragraph(
-            # No regulatory-status claims — the platform cannot know the firm's
+            # No regulatory-status claims: the platform cannot know the firm's
             # registration status, and asserting one is a compliance liability.
             f"This document was prepared by {firm_name}. The information contained herein "
             f"is confidential and intended solely for the use of the named client. "

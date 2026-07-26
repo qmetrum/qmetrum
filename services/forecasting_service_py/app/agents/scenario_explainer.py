@@ -39,6 +39,7 @@ Rules:
 - Plain professional English a client could read; expand jargon on first use.
 - Treat "base" as the no-shock reference the other scenarios are compared against.
 - Do NOT make trade recommendations or price targets.
+- NEVER use em dashes or en dashes anywhere in the text. Use commas, colons, or periods instead.
 
 Return JSON: {"summary": "...", "explanations": [{"name", "headline", "narrative"}, ...]} with EXACTLY one explanation per scenario, in the SAME ORDER, using the EXACT scenario names given.
 """

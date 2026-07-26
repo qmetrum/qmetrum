@@ -40,7 +40,7 @@ def make_annual_performance(months, port_cumulative, bench_cumulative):
     ax.tick_params(colors="#5A6270", labelsize=7.5)
     ax.grid(axis="y", color="#EEF0F3", linewidth=0.6)
     ax.set_axisbelow(True)
-    ax.set_title("Cumulative return — full year",
+    ax.set_title("Cumulative return: full year",
                  fontsize=10, fontweight="600", color="#1A1A2E", loc="left", pad=10)
     ax.set_ylabel("Return (%)", fontsize=8, color="#5A6270")
     ax.legend(fontsize=7, loc="upper left", framealpha=0.9, edgecolor="#DDE1E6")
@@ -108,7 +108,7 @@ def make_risk_evolution(months_labels, vol_series, fragility_series):
     ax1.tick_params(axis="x", colors="#5A6270", labelsize=7.5)
     ax1.grid(axis="y", color="#EEF0F3", linewidth=0.6)
     ax1.set_axisbelow(True)
-    ax1.set_title("Risk regime evolution — full year",
+    ax1.set_title("Risk regime evolution: full year",
                  fontsize=10, fontweight="600", color="#1A1A2E", loc="left", pad=10)
 
     lines1, labels1 = ax1.get_legend_handles_labels()
@@ -161,7 +161,7 @@ def generate_yearend_report(output_path, data):
             firm_name=d["firm_name"], client_name=d["client_name"],
             report_date=d["report_date"],
             report_type=f"{d['review_year']} YEAR-END PORTFOLIO REVIEW",
-            subtitle=f"Annual performance and outlook — {d['review_year']}",
+            subtitle=f"Annual performance and outlook: {d['review_year']}",
             cover_metrics=[
                 ("TOTAL RETURN", total_return_str),
                 ("BENCHMARK", bench_str),
@@ -319,7 +319,7 @@ if __name__ == "__main__":
         "proposed_changes": [
             "Increase international equity (VXUS) from 15% to 18%, funded by trimming VTI from 35% to 32%.",
             "Add 2% allocation to short-duration high-yield (SHYG) for income enhancement.",
-            "No changes to commodity or TIPS allocations — both performed well and remain appropriate.",
+            "No changes to commodity or TIPS allocations: both performed well and remain appropriate.",
         ],
     }
     generate_yearend_report("/home/claude/reports/yearend_report.pdf", demo)

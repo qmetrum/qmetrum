@@ -57,11 +57,11 @@ def _style_ax(ax, title=None, ylabel=None):
 def _make_forecast_chart(dates_hist, hist_prices, dates_fc, fc_prices,
                          fc_lower, fc_upper, report_date, horizon=90):
     fig, ax = plt.subplots(figsize=(6.8, 3.0))
-    _style_ax(ax, f"Portfolio forecast — {horizon}-day horizon", "Indexed value")
+    _style_ax(ax, f"Portfolio forecast: {horizon}-day horizon", "Indexed value")
 
     ax.plot(dates_hist, hist_prices, color="#2D3E50", linewidth=1.2, label="History")
     ax.plot(dates_fc, fc_prices, color="#0F8B6E", linewidth=1.5, label="Forecast (median)")
-    # Band only when the engine actually produced one — never an invented one.
+    # Band only when the engine actually produced one: never an invented one.
     if fc_lower is not None and fc_upper is not None:
         ax.fill_between(dates_fc, fc_lower, fc_upper, color="#0F8B6E", alpha=0.10,
                         label="95% confidence")
@@ -79,7 +79,7 @@ def _make_forecast_chart(dates_hist, hist_prices, dates_fc, fc_prices,
 def _make_volatility_chart(dates_hist, vol_hist, dates_fc, vol_fc,
                            vol_lower, vol_upper, report_date):
     fig, ax = plt.subplots(figsize=(6.8, 2.4))
-    _style_ax(ax, "Annualized volatility — realized and forecast", "Volatility (%)")
+    _style_ax(ax, "Annualized volatility: realized and forecast", "Volatility (%)")
 
     ax.plot(dates_hist, vol_hist, color="#2D3E50", linewidth=1.0,
             label="Realized (21-day rolling)")
@@ -98,7 +98,7 @@ def _make_volatility_chart(dates_hist, vol_hist, dates_fc, vol_fc,
 
 def _make_scenario_chart(scenarios):
     fig, ax = plt.subplots(figsize=(6.8, 2.6))
-    _style_ax(ax, "Scenario analysis — simulated median outcome vs base")
+    _style_ax(ax, "Scenario analysis: simulated median outcome vs base")
 
     names = [s["name"] for s in scenarios]
     returns = [float(s.get("return_pct") or 0.0) for s in scenarios]
@@ -176,6 +176,7 @@ def generate_quarterly_report(output_path, data):
     d = data
     rm = d["risk_metrics"]
     report_date = d["report_date"]
+    narrative = d.get("narrative") or {}
 
     doc = SimpleDocTemplate(
         output_path, pagesize=letter,
@@ -200,7 +201,7 @@ def generate_quarterly_report(output_path, data):
     dates_hist = [report_date - timedelta(days=n_hist - i) for i in range(n_hist)]
     dates_fc = [report_date + timedelta(days=i + 1) for i in range(horizon)]
 
-    # Historical prices — use real portfolio prices passed from router
+    # Historical prices: use real portfolio prices passed from router
     portfolio_prices = d.get("portfolio_prices", [])
     portfolio_dates = d.get("portfolio_dates", [])
     if portfolio_prices and len(portfolio_prices) >= n_hist:
@@ -249,7 +250,7 @@ def generate_quarterly_report(output_path, data):
         # No interval from the engine -> omit the band; never invent one.
         fc_lower = fc_upper = None
 
-    # Volatility — a true rolling standard deviation of returns (the old code
+    # Volatility: a true rolling standard deviation of returns (the old code
     # plotted |rolling MEAN return|, i.e. drift, labeled as volatility).
     vol_hist = np.array([
         np.std(hist_returns[max(0, i - 20):i + 1]) for i in range(len(hist_returns))
@@ -269,7 +270,7 @@ def generate_quarterly_report(output_path, data):
             firm_name=d["firm_name"], client_name=d["client_name"],
             report_date=report_date,
             report_type="PORTFOLIO RISK INTELLIGENCE REPORT",
-            subtitle=f"Prepared for review — {report_date.strftime('%B %d, %Y')}",
+            subtitle=f"Prepared for review: {report_date.strftime('%B %d, %Y')}",
             cover_metrics=[
                 ("PORTFOLIO VALUE", f"${d['portfolio_value']:,.0f}"),
                 ("REGIME", str(rm.get("regime", "Normal"))),
@@ -288,6 +289,9 @@ def generate_quarterly_report(output_path, data):
     # ── PAGE 2: EXECUTIVE SUMMARY ──
     story.append(Paragraph("EXECUTIVE SUMMARY", s_section))
     story.append(Paragraph("Portfolio overview", s_heading))
+    if narrative.get("executive_summary"):
+        story.append(Paragraph(escape(narrative["executive_summary"]), s_body))
+        story.append(Spacer(1, 4))
     story.append(Paragraph(
         f"This report provides a comprehensive risk assessment of the {d['client_name']} portfolio "
         f"as of {report_date.strftime('%B %d, %Y')}. The analysis employs a multi-model ensemble "
@@ -327,6 +331,8 @@ def generate_quarterly_report(output_path, data):
         f"<b>{rm.get('fragility_score', 0):.2f}</b>.",
         s_body_sm
     ))
+    if narrative.get("forecast_commentary"):
+        story.append(Paragraph(escape(narrative["forecast_commentary"]), s_body_sm))
 
     story.append(PageBreak())
 
@@ -372,10 +378,14 @@ def generate_quarterly_report(output_path, data):
          "Current vol / long-term median vol (>1.5 = fragile)"],
     ]
     story.append(styled_table(risk_table_data, [0.28, 0.18, 0.54]))
+    if narrative.get("risk_commentary"):
+        story.append(Spacer(1, 6))
+        story.append(Paragraph("What these numbers tell us", s_subheading))
+        story.append(Paragraph(escape(narrative["risk_commentary"]), s_body_sm))
 
     story.append(PageBreak())
 
-    # ── PAGE 4: SCENARIO ANALYSIS (simulated — only rendered when a real run
+    # ── PAGE 4: SCENARIO ANALYSIS (simulated: only rendered when a real run
     # was supplied; this section never shows invented numbers) ──
     scenarios = d.get("scenarios", [])
     if scenarios:
@@ -396,7 +406,7 @@ def generate_quarterly_report(output_path, data):
         story.append(Spacer(1, 8))
 
         def _cell(v, fmt="{:+.1f}%"):
-            return fmt.format(v) if v is not None else "—"
+            return fmt.format(v) if v is not None else "n/a"
 
         sc_table_data = [["Scenario", "Return vs base", "Pessimistic tail", "95% band width", "Dollar impact"]]
         for row in scenarios:
@@ -407,19 +417,23 @@ def generate_quarterly_report(output_path, data):
                 _cell(ret),
                 _cell(row.get("downside_pct")),
                 _cell(row.get("band_pct"), "{:.1f}%"),
-                (f"{'+' if impact > 0 else ''}${impact:,.0f}" if impact is not None else "—"),
+                (f"{'+' if impact > 0 else ''}${impact:,.0f}" if impact is not None else "n/a"),
             ])
         story.append(styled_table(sc_table_data, [0.28, 0.17, 0.17, 0.17, 0.21]))
         story.append(Spacer(1, 10))
 
-        # AI narrative — grounded in the simulated facts above, clearly labeled.
+        if narrative.get("scenario_commentary"):
+            story.append(Paragraph(escape(narrative["scenario_commentary"]), s_body_sm))
+            story.append(Spacer(1, 6))
+
+        # AI narrative, grounded in the simulated facts above, clearly labeled.
         sa = d.get("scenario_analysis") or {}
         if sa.get("summary"):
             story.append(Paragraph("AI scenario analysis", s_subheading))
             story.append(Paragraph(escape(sa["summary"]), s_body_sm))
             for e in sa.get("explanations", []):
                 story.append(Paragraph(
-                    f"<b>{escape(e.get('name', ''))}</b> — {escape(e.get('narrative', ''))}",
+                    f"<b>{escape(e.get('name', ''))}</b>: {escape(e.get('narrative', ''))}",
                     s_body_sm
                 ))
             story.append(Paragraph(
@@ -443,6 +457,23 @@ def generate_quarterly_report(output_path, data):
             ])
         h_data.append(["", "", "", "100%", f"${d['portfolio_value']:,.0f}"])
         story.append(styled_table(h_data, [0.10, 0.32, 0.20, 0.14, 0.24]))
+        if narrative.get("holdings_commentary"):
+            story.append(Spacer(1, 6))
+            story.append(Paragraph(escape(narrative["holdings_commentary"]), s_body_sm))
+
+    # Considerations: model-derived options for the advisor to evaluate.
+    if narrative.get("considerations"):
+        story.append(Spacer(1, 12))
+        story.append(Paragraph("CONSIDERATIONS", s_section))
+        story.append(Paragraph("Model-derived observations to evaluate", s_subheading))
+        for c in narrative["considerations"]:
+            story.append(Paragraph(f"•  {escape(c)}", s_body_sm))
+        story.append(Paragraph(
+            "These are AI-generated observations derived from the figures in this report, "
+            "provided for the advisor's professional evaluation. They are not investment "
+            "advice, instructions, or recommendations to transact.",
+            s_disclaimer
+        ))
 
     story.append(PageBreak())
 
@@ -451,8 +482,8 @@ def generate_quarterly_report(output_path, data):
     story.append(Paragraph("Model framework and assumptions", s_heading))
 
     story.append(Paragraph(
-        "<b>Forecasting engine</b> — The system runs a tournament across five model families "
-        "(ARIMA, LSTM, Prophet, BSTS, QRC — Quantum Reservoir Computing) using walk-forward validation. "
+        "<b>Forecasting engine</b>: The system runs a tournament across five model families "
+        "(ARIMA, LSTM, Prophet, BSTS, QRC: Quantum Reservoir Computing) using walk-forward validation. "
         "Each model is trained on 2 years of daily close prices with exogenous features "
         "including quantum circuit encodings, semantic embeddings of price regime descriptions, "
         "and GARCH-derived volatility. The winner is selected by combined RMSE across "
@@ -460,7 +491,7 @@ def generate_quarterly_report(output_path, data):
         s_body
     ))
     story.append(Paragraph(
-        "<b>Risk engine</b> — Volatility is modeled via sGARCH(1,1) with Student-t "
+        "<b>Risk engine</b>: Volatility is modeled via sGARCH(1,1) with Student-t "
         "innovations (R/rugarch). This captures fat tails and volatility clustering that "
         "Gaussian models miss. Monte Carlo simulation generates 1,000 price paths for "
         "cone construction. The fragility score compares current volatility to the 126-day "
@@ -468,7 +499,7 @@ def generate_quarterly_report(output_path, data):
         s_body
     ))
     story.append(Paragraph(
-        "<b>Scenario analysis</b> — Scenarios are simulated with a tensor-network "
+        "<b>Scenario analysis</b>: Scenarios are simulated with a tensor-network "
         "(MPS) copula: the portfolio's cross-asset dependence is learned from history "
         "and 500 joint return paths are sampled per scenario; each scenario's price "
         "shock, volatility multiple and drift re-shape the marginal distributions "
@@ -478,7 +509,7 @@ def generate_quarterly_report(output_path, data):
         s_body
     ))
     story.append(Paragraph(
-        "<b>Confidence intervals</b> — Where shown, the 95% band is the winning "
+        "<b>Confidence intervals</b>: Where shown, the 95% band is the winning "
         "forecast model's own interval. When a model run does not produce an "
         "interval, the band is omitted rather than approximated.",
         s_body

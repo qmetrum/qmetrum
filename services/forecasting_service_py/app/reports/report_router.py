@@ -1,5 +1,5 @@
 """
-report_router.py — FastAPI router for PDF report generation.
+report_router.py: FastAPI router for PDF report generation.
 
 Drop this file into your app/ directory and register it in main.py:
 
@@ -20,7 +20,9 @@ import uuid
 import logging
 import numpy as np
 import pandas as pd
+from bisect import bisect_left
 from io import BytesIO
+from xml.sax.saxutils import escape
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 
@@ -37,7 +39,7 @@ from app.services.market_store import get_price_series_cached, get_fundamentals_
 from app.services.risk_client import calculate_risk
 from app.db.database import engine
 from app.db.models import User, Portfolio, Position, PortfolioReportDataCache
-from app.agents import scenario_explainer
+from app.agents import report_narrator, scenario_explainer
 from app.reports.report_data_helpers import (
     compute_asset_contributions,
     compute_monthly_benchmark_returns,
@@ -45,8 +47,8 @@ from app.reports.report_data_helpers import (
     compute_monthly_returns,
     compute_monthly_vol,
     compute_portfolio_beta,
-    get_benchmark_index_series,
     get_benchmark_series,
+    get_benchmark_series_labeled,
     build_portfolio_daily_prices,
     DEFAULT_BENCHMARK,
 )
@@ -96,19 +98,23 @@ class QuarterlyReportRequest(BaseModel):
     firm_name: str
     assets: List[ReportAsset]
     horizon_days: int = 90
-    portfolio_value: Optional[float] = None  # REQUIRED at the endpoint — never invented
+    portfolio_value: Optional[float] = None  # REQUIRED at the endpoint: never invented
     # Real simulated scenarios from the Scenario Builder run; when absent the
     # report simply omits the scenario section (it never fabricates one).
     scenarios: Optional[List[ReportScenarioItem]] = None
 
 class OnboardingReportRequest(BaseModel):
-    """New client risk assessment."""
+    """New client risk assessment.
+
+    risk_tolerance and target_vol are the client's STATED inputs and must be
+    supplied by the caller: the report's risk-alignment verdict is built on
+    them, so defaulting them would fabricate a client statement."""
     client_name: str
     advisor_name: str
     firm_name: str
     assets: List[ReportAsset]
-    risk_tolerance: str = "Moderate"   # Conservative, Moderate, Growth, Aggressive
-    target_vol: float = 0.10           # client's target annualized volatility
+    risk_tolerance: str                # Conservative, Moderate, Growth, Aggressive
+    target_vol: float                  # client's target annualized volatility, e.g. 0.10
     portfolio_value: Optional[float] = None
 
 class MarketEventReportRequest(BaseModel):
@@ -132,6 +138,11 @@ class RebalancingReportRequest(BaseModel):
     rationale: str
     tax_considerations: Optional[str] = None
     portfolio_value: Optional[float] = None
+    # Real simulated scenario runs for EACH allocation (same item shape the
+    # quarterly report accepts). The stress section renders only when BOTH
+    # sets are supplied and scenario names match; it is never fabricated.
+    current_scenarios: Optional[List[ReportScenarioItem]] = None
+    proposed_scenarios: Optional[List[ReportScenarioItem]] = None
 
 class YearEndReportRequest(BaseModel):
     """Annual performance review."""
@@ -151,7 +162,7 @@ class YearEndReportRequest(BaseModel):
 def _resolve_user(user_id: Optional[int], x_user_id: Optional[int]) -> int:
     # Production (Cognito configured): only trust the X-User-Id header set by
     # CognitoAuthMiddleware from a verified JWT claim. Refuse query-param and
-    # DEFAULT_USER_ID fallbacks — they're impersonation vectors.
+    # DEFAULT_USER_ID fallbacks: they're impersonation vectors.
     from app.auth.cognito import is_cognito_configured
     from fastapi import HTTPException
     if is_cognito_configured():
@@ -167,13 +178,37 @@ def _resolve_user(user_id: Optional[int], x_user_id: Optional[int]) -> int:
 
 
 def _require_portfolio_value(value, label: str = "portfolio_value") -> float:
-    """Dollar figures must come from the caller — never invent an AUM."""
+    """Dollar figures must come from the caller: never invent an AUM."""
     if value is None or float(value) <= 0:
         raise HTTPException(
             status_code=400,
-            detail=f"{label} is required — reports never invent portfolio values.",
+            detail=f"{label} is required: reports never invent portfolio values.",
         )
     return float(value)
+
+
+def _last_cached_price(ticker: str, *datasets: dict) -> Optional[float]:
+    """Most recent real close for a ticker: prefer the price frames already
+    fetched for this report, then the market cache. Returns None when no real
+    price exists, so share counts get omitted rather than invented."""
+    for data in datasets:
+        df = (data.get("price_data") or {}).get(ticker)
+        if df is not None and len(df) and "price" in df:
+            try:
+                px = float(df["price"].iloc[-1])
+            except (TypeError, ValueError):
+                continue
+            if px > 0:
+                return px
+    try:
+        raw = get_price_series_cached(ticker)
+        if raw:
+            px = float(raw[-1].get("price") or 0.0)
+            if px > 0:
+                return px
+    except Exception as e:
+        logger.warning(f"Last price lookup failed for {ticker}: {e}")
+    return None
 
 
 def _cached_blob_matches(blob: dict, assets: List[ReportAsset]) -> bool:
@@ -209,7 +244,7 @@ def _try_cached_portfolio_data(
                     logger.info(f"Portfolio {portfolio_id} report served from cache")
                     return _prepare_cached_result(cached.result_blob)
             else:
-                # No portfolio_id — scan all cached portfolios for a full match
+                # No portfolio_id: scan all cached portfolios for a full match
                 all_cached = session.exec(
                     select(PortfolioReportDataCache)
                     .order_by(PortfolioReportDataCache.updated_at.desc())
@@ -473,27 +508,116 @@ def _compute_top_contributors(data: dict, assets: List, year: int, top: bool = T
         return contributions[-2:] if len(contributions) >= 2 else contributions
 
 
-def _compute_holdings_impact(data: dict, assets: List, event_date: datetime) -> List[Dict]:
-    """Compute real per-asset returns and contributions around an event date."""
+def _compute_holdings_impact(data: dict, assets: List, window_start: datetime,
+                             window_end: datetime) -> List[Dict]:
+    """Real per-asset returns and weighted contributions over the event window.
+    Assets with no price data inside the window get None (rendered as n/a),
+    never a silent 0.0."""
     price_data = data.get("price_data", {})
     weights = data.get("weights", {})
-    window_start = event_date - timedelta(days=15)
-    window_end = event_date + timedelta(days=15)
-
-    contributions = compute_asset_contributions(price_data, weights, window_start, window_end)
-    contrib_map = {c["ticker"]: c for c in contributions}
 
     results = []
     for a in assets:
         ticker = a.ticker.upper()
-        c = contrib_map.get(ticker, {})
+        ret = None
+        df = price_data.get(ticker)
+        if df is not None and len(df):
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"])
+            mask = (df["date"] >= pd.Timestamp(window_start)) & (df["date"] <= pd.Timestamp(window_end))
+            period = df[mask].sort_values("date")
+            if len(period) >= 2 and float(period["price"].iloc[0]) > 0:
+                ret = float(period["price"].iloc[-1] / period["price"].iloc[0] - 1)
         results.append({
             "ticker": ticker,
             "name": data["fundamentals"].get(ticker, {}).get("profile", {}).get("name", ticker),
-            "return": c.get("return", 0.0),
-            "contribution": c.get("contribution", 0.0),
+            "return": ret,
+            "contribution": (ret * weights.get(ticker, 0.0)) if ret is not None else None,
         })
+    results.sort(key=lambda r: (r["contribution"] is None, -(r["contribution"] or 0.0)))
     return results
+
+
+# Honest labels for whichever benchmark symbol actually supplied data.
+BENCHMARK_LABELS = {
+    "^GSPC": "S&P 500",
+    "SPY": "S&P 500 (SPY proxy)",
+    "VOO": "S&P 500 (VOO proxy)",
+}
+
+
+def _slice_event_window(dates_iso: List[str], prices: List[float], event_date: datetime,
+                        pre_days: int = 15, post_days: int = 15) -> dict:
+    """Slice the REAL portfolio series around event_date (trading days).
+
+    Event impact is measured from the last close BEFORE the event through the
+    window end. Raises 400 when the event date falls outside the available
+    history: the report never fabricates an event window."""
+    n = min(len(dates_iso), len(prices))
+    if n < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough portfolio price history to build an event window.",
+        )
+    try:
+        ts = [datetime.fromisoformat(str(x)[:10]) for x in dates_iso[:n]]
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Portfolio price dates are malformed.")
+    if event_date < ts[0] or event_date > ts[-1]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"event_date {event_date.date().isoformat()} is outside the available "
+                f"price history ({ts[0].date().isoformat()} to {ts[-1].date().isoformat()}). "
+                "The report will not fabricate an event window."
+            ),
+        )
+    pos = bisect_left(ts, event_date)  # first trading day on/after the event
+    start = max(0, pos - pre_days)
+    end = min(n, pos + post_days + 1)
+    window_dates = ts[start:end]
+    window_prices = np.array(prices[start:end], dtype=float)
+    if len(window_prices) < 2 or window_prices[0] <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Not enough portfolio price history around the event date.",
+        )
+    anchor = max(0, pos - 1 - start)  # last trading day BEFORE the event, in-window
+    port_idx = window_prices / window_prices[0] * 100.0
+    port_dd = (port_idx / np.maximum.accumulate(port_idx) - 1) * 100
+    return {
+        "dates": window_dates,
+        "port_idx": port_idx,
+        "port_dd": port_dd,
+        "anchor": anchor,
+        "event_pos": pos - start,
+        "event_return": float(port_idx[-1] / port_idx[anchor] - 1),
+        "drawdown_peak": float(port_dd.min() / 100.0),
+    }
+
+
+def _align_benchmark_to_dates(bench_df: pd.DataFrame,
+                              window_dates: List[datetime]) -> Optional[np.ndarray]:
+    """Align benchmark closes to the portfolio's REAL trading dates, by DATE.
+    Returns the indexed series (base 100), or None when alignment is not
+    possible (no data, missing endpoints, or sparse coverage): the report then
+    omits the benchmark rather than padding a fake one."""
+    if bench_df is None or bench_df.empty or not window_dates:
+        return None
+    closes = (
+        bench_df.assign(date=pd.to_datetime(bench_df["date"]).dt.normalize())
+        .drop_duplicates("date", keep="last")
+        .set_index("date")["close"]
+    )
+    idx = pd.DatetimeIndex([pd.Timestamp(dt).normalize() for dt in window_dates])
+    vals = closes.reindex(idx)
+    if pd.isna(vals.iloc[0]) or pd.isna(vals.iloc[-1]) or vals.notna().mean() < 0.9:
+        return None
+    vals = vals.ffill()
+    base = float(vals.iloc[0])
+    if base <= 0:
+        return None
+    return (vals.to_numpy(dtype=float) / base) * 100.0
 
 
 # ────────────────────────────────────────────────────────────
@@ -514,15 +638,16 @@ def generate_quarterly(
     output_path = os.path.join(REPORT_TMP_DIR, f"quarterly_{report_id}.pdf")
     report_date = datetime.utcnow()
 
+    # Validate cheap inputs BEFORE the expensive engine fetch.
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
+
     # Fetch live data from your engine
     data = _fetch_portfolio_data(payload.assets, horizon_days=payload.horizon_days)
-
-    portfolio_value = _require_portfolio_value(payload.portfolio_value)
 
     # Real scenario section: derived from the client's simulated fans; the AI
     # narrative reuses the scenario explainer (content-hash cached, so a page
     # that already ran the analysis costs nothing here). Failures degrade to a
-    # numbers-only section — never to invented numbers.
+    # numbers-only section: never to invented numbers.
     scenario_rows: list = []
     scenario_analysis = None
     scenario_items = [
@@ -557,6 +682,41 @@ def generate_quarterly(
             except Exception as e:
                 logger.warning(f"Report scenario AI analysis unavailable: {e}")
 
+    holdings_list = [
+        {
+            "ticker": a.ticker.upper(),
+            "name": data["fundamentals"].get(a.ticker.upper(), {}).get("profile", {}).get("name", a.ticker),
+            "sector": data["fundamentals"].get(a.ticker.upper(), {}).get("type", "Equity"),
+            "weight": a.weight,
+            "value": portfolio_value * a.weight,
+        }
+        for a in payload.assets
+    ]
+
+    # Narrative layer: written analysis grounded in the SAME real facts the
+    # report renders. Unavailable -> numbers-only report, never invented text.
+    narrative = None
+    try:
+        fc_res = data.get("forecast_result") or {}
+        fp = fc_res.get("forecast_prices") or []
+        fc_facts = {}
+        if len(fp) >= 2 and fp[0]:
+            fc_facts["return_pct"] = (fp[-1] / fp[0] - 1) * 100
+            lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
+            if lo and hi and fp[-1]:
+                fc_facts["band_pct"] = (hi[-1] - lo[-1]) / fp[-1] * 100
+        narrative, _ = report_narrator.run(facts={
+            "portfolio_name": payload.client_name,
+            "portfolio_value": portfolio_value,
+            "horizon_days": payload.horizon_days,
+            "risk_metrics": data["risk_metrics"],
+            "forecast": fc_facts,
+            "scenarios": scenario_rows,
+            "holdings": holdings_list,
+        })
+    except Exception as e:
+        logger.warning(f"Report narrative unavailable: {e}")
+
     # Build the template data dict
     # (This is where your engine output maps to the template's expected format)
     template_data = {
@@ -565,16 +725,7 @@ def generate_quarterly(
         "firm_name": payload.firm_name,
         "report_date": report_date,
         "portfolio_value": portfolio_value,
-        "holdings": [
-            {
-                "ticker": a.ticker.upper(),
-                "name": data["fundamentals"].get(a.ticker.upper(), {}).get("profile", {}).get("name", a.ticker),
-                "sector": data["fundamentals"].get(a.ticker.upper(), {}).get("type", "Equity"),
-                "weight": a.weight,
-                "value": portfolio_value * a.weight,
-            }
-            for a in payload.assets
-        ],
+        "holdings": holdings_list,
         "risk_metrics": data["risk_metrics"],
         "forecast_result": data["forecast_result"],
         "risk_data": data["risk_data"],
@@ -582,6 +733,7 @@ def generate_quarterly(
         "portfolio_dates": data.get("dates", []),
         "scenarios": scenario_rows,
         "scenario_analysis": scenario_analysis,
+        "narrative": narrative,
     }
 
     generate_quarterly_report(output_path, template_data)
@@ -600,20 +752,40 @@ def generate_onboarding(
     output_path = os.path.join(REPORT_TMP_DIR, f"onboarding_{report_id}.pdf")
     report_date = datetime.utcnow()
 
+    # Validate cheap inputs BEFORE the expensive engine fetch.
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
+    if float(payload.target_vol) <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail="target_vol must be a positive annualized volatility (e.g. 0.10 for 10%).",
+        )
+
     data = _fetch_portfolio_data(payload.assets)
     rm = data["risk_metrics"]
     actual_vol = rm["annualized_vol"]
 
-    portfolio_value = _require_portfolio_value(payload.portfolio_value)
-
-    # Determine allocation breakdown
-    sector_map = {}
+    # Current allocation grouped by asset TYPE (fundamentals 'type'; labeled
+    # honestly as type, not sector). There is no optimizer in this pipeline,
+    # so no "recommended" allocation is produced: the old report rendered a
+    # copy of the current allocation as a recommendation.
+    allocation = {}
     for a in payload.assets:
         t = a.ticker.upper()
-        sector = data["fundamentals"].get(t, {}).get("type", "Equity")
-        sector_map[sector] = sector_map.get(sector, 0) + a.weight
+        asset_type = data["fundamentals"].get(t, {}).get("type", "Equity")
+        allocation[asset_type] = allocation.get(asset_type, 0) + a.weight
 
-    # Generate findings from risk analysis
+    holdings_list = [
+        {
+            "ticker": a.ticker.upper(),
+            "name": data["fundamentals"].get(a.ticker.upper(), {}).get("profile", {}).get("name", a.ticker),
+            "asset_type": data["fundamentals"].get(a.ticker.upper(), {}).get("type", "Equity"),
+            "weight": a.weight,
+            "value": portfolio_value * a.weight,
+        }
+        for a in payload.assets
+    ]
+
+    # Computed findings from the measured risk metrics (no canned advice).
     findings = []
     mismatch = actual_vol - payload.target_vol
     if abs(mismatch) > 0.02:
@@ -625,7 +797,8 @@ def generate_onboarding(
     if rm["max_drawdown"] < -0.15:
         findings.append(
             f"Maximum drawdown of {rm['max_drawdown']*100:.1f}% indicates significant "
-            f"tail risk that may exceed comfort level for a {payload.risk_tolerance} investor."
+            f"tail risk that may exceed comfort level for a "
+            f"{escape(payload.risk_tolerance)} investor."
         )
     if rm["sharpe_ratio"] < 0.5:
         findings.append(
@@ -634,6 +807,24 @@ def generate_onboarding(
         )
     if not findings:
         findings.append("Portfolio risk metrics are broadly aligned with the stated risk tolerance.")
+
+    # Narrative layer: the measured risk profile in plain terms vs the client's
+    # stated tolerance and target, what to watch, and options to evaluate,
+    # grounded in the SAME numbers the report renders. Unavailable -> the
+    # assessment ships numbers-only, never canned text.
+    narrative = None
+    try:
+        narrative, _ = report_narrator.run_onboarding(facts={
+            "portfolio_name": payload.client_name,
+            "portfolio_value": portfolio_value,
+            "risk_tolerance": payload.risk_tolerance,
+            "target_vol": payload.target_vol,
+            "risk_metrics": rm,
+            "allocation": allocation,
+            "holdings": holdings_list,
+        })
+    except Exception as e:
+        logger.warning(f"Onboarding narrative unavailable: {e}")
 
     template_data = {
         "client_name": payload.client_name,
@@ -646,24 +837,10 @@ def generate_onboarding(
         "actual_vol": actual_vol,
         "sharpe": rm["sharpe_ratio"],
         "max_drawdown": rm["max_drawdown"],
-        "holdings": [
-            {
-                "ticker": a.ticker.upper(),
-                "name": data["fundamentals"].get(a.ticker.upper(), {}).get("profile", {}).get("name", a.ticker),
-                "sector": data["fundamentals"].get(a.ticker.upper(), {}).get("type", "Equity"),
-                "weight": a.weight,
-                "value": portfolio_value * a.weight,
-            }
-            for a in payload.assets
-        ],
-        "current_allocation": sector_map,
-        "recommended_allocation": sector_map,  # in production, this would come from an optimizer
+        "holdings": holdings_list,
+        "current_allocation": allocation,
         "risk_findings": findings,
-        "next_steps": [
-            "Review risk findings and discuss any concerns.",
-            "Confirm investment objectives and time horizon.",
-            "Schedule follow-up to implement recommended changes if applicable.",
-        ],
+        "narrative": narrative,
     }
 
     generate_onboarding_report(output_path, template_data)
@@ -681,70 +858,124 @@ def generate_event_report(
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"event_{report_id}.pdf")
     report_date = datetime.utcnow()
-    event_date = datetime.fromisoformat(payload.event_date)
+
+    # Validate cheap inputs BEFORE the expensive engine fetch.
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
+    try:
+        event_date = datetime.fromisoformat(str(payload.event_date)[:10])
+    except ValueError:
+        raise HTTPException(status_code=400,
+                            detail="event_date must be an ISO date (YYYY-MM-DD).")
 
     data = _fetch_portfolio_data(payload.assets, horizon_days=30)
     rm = data["risk_metrics"]
 
-    # Build 30-day window around event
-    prices = np.array(data["portfolio_prices"][-30:])
-    port_idx = (prices / prices[0]) * 100
+    # REAL event window: sliced from the portfolio's actual trading dates
+    # around event_date (400 if the event falls outside the history).
+    window = _slice_event_window(
+        data.get("dates", []), data.get("portfolio_prices", []), event_date,
+    )
+    dates = window["dates"]
+    anchor_date = dates[window["anchor"]]
 
-    # Fetch real benchmark data for the event window
-    dates = [event_date - timedelta(days=15) + timedelta(days=i) for i in range(len(prices))]
-    with Session(engine) as session:
-        bench_idx_arr, bench_dates = get_benchmark_index_series(
-            DEFAULT_BENCHMARK,
-            event_date - timedelta(days=20),
-            event_date + timedelta(days=20),
-            session,
-            base=100.0,
-        )
-    # Align benchmark to portfolio length
-    if len(bench_idx_arr) >= len(prices):
-        bench_idx = bench_idx_arr[:len(prices)]
-    else:
-        # Pad with last value if benchmark has fewer points
-        bench_idx = np.pad(bench_idx_arr, (0, len(prices) - len(bench_idx_arr)),
-                          mode='edge')
+    # Benchmark: fetched for the SAME window and aligned by DATE; omitted when
+    # alignment is impossible, never padded.
+    bench_idx = None
+    bench_label = None
+    try:
+        with Session(engine) as session:
+            bench_df, bench_symbol = get_benchmark_series_labeled(
+                DEFAULT_BENCHMARK, dates[0], dates[-1], session,
+            )
+        bench_idx = _align_benchmark_to_dates(bench_df, dates)
+        if bench_idx is not None:
+            bench_label = BENCHMARK_LABELS.get(bench_symbol, bench_symbol)
+    except Exception as e:
+        logger.warning(f"Benchmark unavailable for event window: {e}")
+        bench_idx = None
 
-    port_dd = ((port_idx / np.maximum.accumulate(port_idx)) - 1) * 100
-    bench_dd = ((bench_idx / np.maximum.accumulate(bench_idx)) - 1) * 100
+    port_event_return = window["event_return"]
+    bench_event_return = None
+    bench_dd = None
+    if bench_idx is not None:
+        bench_event_return = float(bench_idx[-1] / bench_idx[window["anchor"]] - 1)
+        bench_dd = ((bench_idx / np.maximum.accumulate(bench_idx)) - 1) * 100
 
-    port_event_return = (port_idx[-1] / port_idx[14] - 1) if len(port_idx) > 14 else 0
-    bench_event_return = (bench_idx[-1] / bench_idx[14] - 1) if len(bench_idx) > 14 else 0
+    # Per-holding impact over the SAME span as the headline number: from the
+    # last close before the event through the window end.
+    holdings_impact = _compute_holdings_impact(data, payload.assets, anchor_date, dates[-1])
+
+    # Forecast facts: the engine's ACTUAL projection, never a canned outlook.
+    fc_res = data.get("forecast_result") or {}
+    fp = fc_res.get("forecast_prices") or []
+    forecast_facts = None
+    if len(fp) >= 2 and fp[0]:
+        forecast_facts = {
+            "model": str(data.get("model_used") or "unknown"),
+            "horizon_days": len(fp),
+            "return_pct": (fp[-1] / fp[0] - 1) * 100,
+            "band_pct": None,
+        }
+        lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
+        if lo and hi and fp[-1]:
+            forecast_facts["band_pct"] = (hi[-1] - lo[-1]) / fp[-1] * 100
+
+    # Narrative layer: what happened in the window, benchmark comparison, and
+    # an outlook grounded in the actual forecast. Unavailable -> the briefing
+    # ships numbers-only, never canned text.
+    narrative = None
+    try:
+        narrative, _ = report_narrator.run_market_event(facts={
+            "portfolio_name": payload.client_name,
+            "portfolio_value": portfolio_value,
+            "event_name": payload.event_name,
+            "event_date": event_date.date().isoformat(),
+            "event_summary": payload.event_summary,
+            "window_start": dates[0].date().isoformat(),
+            "window_end": dates[-1].date().isoformat(),
+            "trading_days": len(dates),
+            "portfolio": {
+                "event_return": port_event_return,
+                "peak_drawdown": window["drawdown_peak"],
+            },
+            "benchmark": (
+                {
+                    "label": bench_label,
+                    "event_return": bench_event_return,
+                    "peak_drawdown": float(np.min(bench_dd)) / 100.0,
+                }
+                if bench_event_return is not None else None
+            ),
+            "risk": {"regime": rm["regime"], "fragility_score": rm["fragility_score"]},
+            "forecast": forecast_facts,
+            "holdings_impact": holdings_impact,
+        })
+    except Exception as e:
+        logger.warning(f"Market event narrative unavailable: {e}")
 
     template_data = {
         "client_name": payload.client_name,
         "advisor_name": payload.advisor_name,
         "firm_name": payload.firm_name,
         "report_date": report_date,
-        "portfolio_value": _require_portfolio_value(payload.portfolio_value),
+        "portfolio_value": portfolio_value,
         "event_name": payload.event_name,
         "event_date": event_date,
         "event_summary": payload.event_summary,
         "portfolio_return_event": port_event_return,
         "benchmark_return_event": bench_event_return,
-        "portfolio_drawdown_peak": float(min(port_dd)),
+        "benchmark_label": bench_label,
+        "portfolio_drawdown_peak": window["drawdown_peak"],
         "regime": rm["regime"],
         "fragility_score": rm["fragility_score"],
-        "var_95": rm["var_95_daily"],
-        "holdings_impact": _compute_holdings_impact(data, payload.assets, event_date),
-        "forward_outlook": (
-            f"The GARCH model classifies the current regime as <b>{rm['regime']}</b> "
-            f"with a fragility score of <b>{rm['fragility_score']:.2f}</b>. "
-            f"Our ensemble model projects a gradual recovery over the next 90 days."
-        ),
-        "action_items": [
-            "No immediate changes recommended — monitor fragility score daily.",
-            "If fragility exceeds 2.0 for 5+ sessions, reduce equity exposure by 5%.",
-            "Schedule client call to review updated projections.",
-        ],
+        "holdings_impact": holdings_impact,
+        "forecast_facts": forecast_facts,
+        "narrative": narrative,
         "dates": dates,
-        "portfolio_index": port_idx.tolist(),
-        "benchmark_index": bench_idx.tolist(),
-        "portfolio_dd": port_dd.tolist(),
-        "benchmark_dd": bench_dd.tolist(),
+        "portfolio_index": window["port_idx"].tolist(),
+        "benchmark_index": bench_idx.tolist() if bench_idx is not None else None,
+        "portfolio_dd": window["port_dd"].tolist(),
+        "benchmark_dd": bench_dd.tolist() if bench_dd is not None else None,
     }
 
     generate_market_event_report(output_path, template_data)
@@ -763,16 +994,18 @@ def generate_rebalance_report(
     output_path = os.path.join(REPORT_TMP_DIR, f"rebalance_{report_id}.pdf")
     report_date = datetime.utcnow()
 
+    # Validate cheap inputs BEFORE the expensive engine fetches.
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
+
     # Run engine on BOTH current and proposed portfolios
     current_data = _fetch_portfolio_data(payload.current_assets)
     proposed_data = _fetch_portfolio_data(payload.proposed_assets)
 
-    portfolio_value = _require_portfolio_value(payload.portfolio_value)
-
     current_rm = current_data["risk_metrics"]
     proposed_rm = proposed_data["risk_metrics"]
 
-    # Build trades list
+    # Build trades list. Share counts come from real last prices; when no
+    # price is available the count is omitted, never invented.
     current_weights = {a.ticker.upper(): a.weight for a in payload.current_assets}
     proposed_weights = {a.ticker.upper(): a.weight for a in payload.proposed_assets}
     all_tickers = set(current_weights.keys()) | set(proposed_weights.keys())
@@ -784,16 +1017,13 @@ def generate_rebalance_report(
         diff = pw - cw
         if abs(diff) < 0.001:
             action = "Hold"
-            value = 0
-            shares = 0
-        elif diff > 0:
-            action = "Buy"
-            value = abs(diff) * portfolio_value
-            shares = int(value / 100)  # rough estimate
+            value = 0.0
+            shares = None
         else:
-            action = "Sell"
+            action = "Buy" if diff > 0 else "Sell"
             value = abs(diff) * portfolio_value
-            shares = int(value / 100)
+            last_price = _last_cached_price(ticker, current_data, proposed_data)
+            shares = int(value / last_price) if last_price else None
 
         trades.append({
             "ticker": ticker,
@@ -804,56 +1034,89 @@ def generate_rebalance_report(
             "to_weight": pw,
         })
 
+    # Scenario stress: ONLY from real simulated runs supplied for BOTH weight
+    # sets; scenarios are matched by name and anything unmatched is dropped.
+    # Failures degrade to omitting the section, never to invented numbers.
+    def _usable_scenarios(items):
+        return [
+            i.model_dump() for i in (items or [])
+            if not i.name.startswith("_")
+            and isinstance(i.fan.get("central"), list) and len(i.fan["central"]) >= 2
+        ]
+
+    scenario_rows: list = []
+    current_items = _usable_scenarios(payload.current_scenarios)
+    proposed_items = _usable_scenarios(payload.proposed_scenarios)
+    if current_items and proposed_items:
+        try:
+            current_facts = scenario_explainer.derive_facts(current_items, portfolio_value)
+            proposed_by_name = {
+                f["name"]: f
+                for f in scenario_explainer.derive_facts(proposed_items, portfolio_value)
+            }
+            for cf in current_facts:
+                pf = proposed_by_name.get(cf["name"])
+                if pf is None:
+                    continue
+                c_ret = cf["vs_base_pct"] if cf["vs_base_pct"] is not None else cf["path_return_pct"]
+                p_ret = pf["vs_base_pct"] if pf["vs_base_pct"] is not None else pf["path_return_pct"]
+                if c_ret is None or p_ret is None:
+                    continue
+                scenario_rows.append({
+                    "name": cf["name"],
+                    "is_base": cf["is_base"],
+                    "current_return_pct": c_ret,
+                    "proposed_return_pct": p_ret,
+                })
+        except Exception as e:
+            logger.warning(f"Rebalancing scenario derivation failed: {e}")
+            scenario_rows = []
+
+    current_metrics = {
+        "annualized_vol": current_rm["annualized_vol"],
+        "max_drawdown": current_rm["max_drawdown"],
+        "var_95": current_rm["var_95_daily"],
+        "sharpe": current_rm["sharpe_ratio"],
+        "sortino": current_rm["sortino_ratio"],
+    }
+    proposed_metrics = {
+        "annualized_vol": proposed_rm["annualized_vol"],
+        "max_drawdown": proposed_rm["max_drawdown"],
+        "var_95": proposed_rm["var_95_daily"],
+        "sharpe": proposed_rm["sharpe_ratio"],
+        "sortino": proposed_rm["sortino_ratio"],
+    }
+
+    # Narrative layer: what the proposal changes and why it matters, grounded
+    # in the SAME computed deltas the report renders. Unavailable -> the PDF
+    # ships numbers-only, never canned text.
+    narrative = None
+    try:
+        narrative, _ = report_narrator.run_rebalancing(facts={
+            "portfolio_name": payload.client_name,
+            "portfolio_value": portfolio_value,
+            "current_metrics": current_metrics,
+            "proposed_metrics": proposed_metrics,
+            "trades": trades,
+            "scenarios": scenario_rows,
+            "rationale": payload.rationale,
+        })
+    except Exception as e:
+        logger.warning(f"Rebalancing narrative unavailable: {e}")
+
     template_data = {
         "client_name": payload.client_name,
         "advisor_name": payload.advisor_name,
         "firm_name": payload.firm_name,
         "report_date": report_date,
         "portfolio_value": portfolio_value,
-        "current_metrics": {
-            "annualized_vol": current_rm["annualized_vol"],
-            "max_drawdown": current_rm["max_drawdown"],
-            "var_95": current_rm["var_95_daily"],
-            "sharpe": current_rm["sharpe_ratio"],
-            "sortino": current_rm["sortino_ratio"],
-        },
-        "proposed_metrics": {
-            "annualized_vol": proposed_rm["annualized_vol"],
-            "max_drawdown": proposed_rm["max_drawdown"],
-            "var_95": proposed_rm["var_95_daily"],
-            "sharpe": proposed_rm["sharpe_ratio"],
-            "sortino": proposed_rm["sortino_ratio"],
-        },
+        "current_metrics": current_metrics,
+        "proposed_metrics": proposed_metrics,
         "trades": trades,
-        "scenarios": [
-            {
-                "name": "Base case",
-                "current_return": 0.07,
-                "proposed_return": 0.065,
-            },
-            {
-                "name": "Recession",
-                "current_return": -0.09,
-                "proposed_return": -0.065,
-            },
-            {
-                "name": "Severe downturn",
-                "current_return": -0.23,
-                "proposed_return": -0.18,
-            },
-            {
-                "name": "Rate spike",
-                "current_return": -0.055,
-                "proposed_return": -0.032,
-            },
-        ],
+        "scenarios": scenario_rows,
         "rationale": payload.rationale,
         "tax_considerations": payload.tax_considerations,
-        "implementation_notes": [
-            "Execute sell orders first to generate cash.",
-            "Execute buy orders on T+1 using limit orders at market open.",
-            "Confirm settlement and update model portfolio weights.",
-        ],
+        "narrative": narrative,
     }
 
     generate_rebalancing_report(output_path, template_data)

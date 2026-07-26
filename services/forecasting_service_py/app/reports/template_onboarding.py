@@ -1,36 +1,47 @@
 """
 Template 2: NEW CLIENT ONBOARDING REPORT
-─────────────────────────────────────────
-Purpose: First meeting with a new client. Shows their current portfolio's
-risk profile vs. their stated risk tolerance. Highlights mismatches.
-Maps to: /portfolio/analyze + /forecast/{ticker} endpoints.
+Purpose: First meeting with a new client. Shows the current portfolio's
+MEASURED risk profile vs. the client's stated risk tolerance and target
+volatility, the allocation as it stands today (no invented "recommended"
+allocation), and an AI narrative grounded only in the computed numbers.
+Maps to: /reports/onboarding.
 """
 
-import numpy as np
 from io import BytesIO
-from datetime import datetime
+from xml.sax.saxutils import escape
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image, Table, TableStyle
-from reportlab.lib.enums import TA_CENTER
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak, Image
 
 from app.reports.report_styles import *
 
 
+def _fig_to_image(fig, dpi=180):
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=dpi, bbox_inches="tight",
+                facecolor="#FFFFFF", edgecolor="none", pad_inches=0.15)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+
 def make_risk_tolerance_gauge(actual_vol, target_vol):
-    """Visual gauge showing actual risk vs. client's stated tolerance."""
+    """Visual gauge showing actual risk vs. the client's stated target.
+
+    The axis extends to cover both markers (the old chart hard-capped at 35%,
+    so a higher actual volatility plotted off-chart)."""
     fig, ax = plt.subplots(figsize=(6.8, 2.0))
 
+    x_max = max(35.0, float(actual_vol) * 1.15, float(target_vol) * 1.15)
     zones = [
-        (0, 6,   "#E8F5EC", "Conservative"),
-        (6, 12,  "#EAF2FB", "Moderate"),
-        (12, 20, "#FDF5E6", "Growth"),
-        (20, 35, "#FDECEC", "Aggressive"),
+        (0, 6,     "#E8F5EC", "Conservative"),
+        (6, 12,    "#EAF2FB", "Moderate"),
+        (12, 20,   "#FDF5E6", "Growth"),
+        (20, x_max, "#FDECEC", "Aggressive"),
     ]
     for lo, hi, color, label in zones:
         ax.barh(0, hi - lo, left=lo, height=0.6, color=color, edgecolor="#DDE1E6", linewidth=0.5)
@@ -50,7 +61,7 @@ def make_risk_tolerance_gauge(actual_vol, target_vol):
                 xytext=(0, -24), ha="center", fontsize=7.5, color="#D85A30", fontweight="600",
                 arrowprops=dict(arrowstyle="-", color="#D85A30", lw=0.8))
 
-    ax.set_xlim(0, 35)
+    ax.set_xlim(0, x_max)
     ax.set_ylim(-0.8, 0.8)
     ax.set_xlabel("Annualized volatility (%)", fontsize=8, color="#5A6270")
     ax.set_title("Risk alignment: stated tolerance vs. portfolio reality",
@@ -62,49 +73,45 @@ def make_risk_tolerance_gauge(actual_vol, target_vol):
     ax.spines["bottom"].set_color("#DDE1E6")
     ax.tick_params(colors="#5A6270", labelsize=7.5)
 
-    buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight",
-                facecolor="#FFFFFF", edgecolor="none", pad_inches=0.15)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
+    return _fig_to_image(fig)
 
 
-def make_allocation_comparison(current, recommended):
-    """Side-by-side horizontal bar chart: current vs. recommended allocation."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6.8, 2.4), sharey=True)
+def make_allocation_chart(allocation):
+    """Horizontal bar chart of the CURRENT allocation by asset type.
 
-    categories = list(current.keys())
-    curr_vals = [current[c] * 100 for c in categories]
-    rec_vals = [recommended[c] * 100 for c in categories]
+    The x-axis is sized to the largest weight plus label headroom, so any
+    weight renders fully with its value label visible (the old side-by-side
+    chart clipped bars above 55% and also drew a fabricated "recommended"
+    allocation that was a copy of the current one)."""
+    fig, ax = plt.subplots(figsize=(6.8, 2.2))
+
+    items = sorted(allocation.items(), key=lambda kv: -float(kv[1]))
+    categories = [str(k) for k, _ in items]
+    vals = [float(v) * 100 for _, v in items]
     palette = ["#2B7ACC", "#0F8B6E", "#5A6270", "#D4920B", "#D85A30", "#7C5CBF"]
+    colors = [palette[i % len(palette)] for i in range(len(categories))]
 
-    for ax, vals, title, colors in [
-        (ax1, curr_vals, "Current allocation", ["#8B95A2"] * len(categories)),
-        (ax2, rec_vals, "Recommended allocation", palette[:len(categories)]),
-    ]:
-        bars = ax.barh(categories, vals, color=colors, height=0.55, edgecolor="white", linewidth=0.5)
-        ax.set_title(title, fontsize=9, fontweight="600", color="#1A1A2E", loc="left")
-        ax.set_xlim(0, 55)
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-        ax.spines["left"].set_color("#DDE1E6")
-        ax.spines["bottom"].set_color("#DDE1E6")
-        ax.tick_params(colors="#5A6270", labelsize=7.5)
-        ax.grid(axis="x", color="#EEF0F3", linewidth=0.6)
-        ax.set_axisbelow(True)
-        for bar, val in zip(bars, vals):
-            ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
-                    f"{val:.0f}%", va="center", fontsize=7.5, color="#1A1A2E")
+    bars = ax.barh(categories, vals, color=colors, height=0.55,
+                   edgecolor="white", linewidth=0.5)
+    x_max = max(vals) if vals else 0.0
+    ax.set_xlim(0, max(x_max * 1.18 + 2.0, 10.0))
+    ax.set_title("Current allocation by asset type", fontsize=10, fontweight="600",
+                 color="#1A1A2E", loc="left", pad=10)
+    ax.set_xlabel("Weight (%)", fontsize=8, color="#5A6270")
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_color("#DDE1E6")
+    ax.spines["bottom"].set_color("#DDE1E6")
+    ax.tick_params(colors="#5A6270", labelsize=7.5)
+    ax.grid(axis="x", color="#EEF0F3", linewidth=0.6)
+    ax.set_axisbelow(True)
+    for bar, val in zip(bars, vals):
+        ax.text(bar.get_width() + max(x_max * 0.015, 0.4),
+                bar.get_y() + bar.get_height() / 2,
+                f"{val:.0f}%", va="center", fontsize=7.5, color="#1A1A2E")
 
-    ax1.invert_yaxis()
-    fig.tight_layout(w_pad=3)
-    buf = BytesIO()
-    fig.savefig(buf, format="png", dpi=180, bbox_inches="tight",
-                facecolor="#FFFFFF", edgecolor="none", pad_inches=0.15)
-    buf.seek(0)
-    plt.close(fig)
-    return buf
+    ax.invert_yaxis()
+    return _fig_to_image(fig)
 
 
 def generate_onboarding_report(output_path, data):
@@ -115,19 +122,20 @@ def generate_onboarding_report(output_path, data):
         "firm_name": str,
         "report_date": datetime,
         "portfolio_value": float,
-        "risk_tolerance": str,          # "Moderate", "Growth", etc.
-        "target_vol": float,            # e.g. 0.10
-        "actual_vol": float,            # from engine
+        "risk_tolerance": str,          # the client's STATED tolerance
+        "target_vol": float,            # the client's stated target, e.g. 0.10
+        "actual_vol": float,            # measured, from engine
         "sharpe": float,
         "max_drawdown": float,
-        "holdings": [{"ticker","name","sector","weight","value"}],
-        "current_allocation": {"US Equity": 0.4, ...},
-        "recommended_allocation": {"US Equity": 0.35, ...},
-        "risk_findings": [str, str, ...],   # bullet points from analysis
-        "next_steps": [str, str, ...],
+        "holdings": [{"ticker","name","asset_type","weight","value"}],
+        "current_allocation": {"Equity": 0.65, ...},   # by asset type
+        "risk_findings": [str, ...],    # computed sentences from the router
+        # Optional AI narrative grounded only in the numbers above.
+        "narrative": {"risk_profile_summary","what_to_watch","considerations"},
     }
     """
     d = data
+    narrative = d.get("narrative") or {}
     doc = SimpleDocTemplate(output_path, pagesize=letter,
                             topMargin=60, bottomMargin=60, leftMargin=54, rightMargin=54)
     story = []
@@ -138,10 +146,10 @@ def generate_onboarding_report(output_path, data):
             firm_name=d["firm_name"], client_name=d["client_name"],
             report_date=d["report_date"],
             report_type="NEW CLIENT RISK ASSESSMENT",
-            subtitle=f"Onboarding analysis — {d['report_date'].strftime('%B %d, %Y')}",
+            subtitle=f"Onboarding analysis: {d['report_date'].strftime('%B %d, %Y')}",
             cover_metrics=[
                 ("PORTFOLIO VALUE", f"${d['portfolio_value']:,.0f}"),
-                ("RISK TOLERANCE", d["risk_tolerance"]),
+                ("RISK TOLERANCE", str(d["risk_tolerance"])),
                 ("ACTUAL VOLATILITY", f"{d['actual_vol']*100:.1f}%"),
                 ("MAX DRAWDOWN", f"{d['max_drawdown']*100:.1f}%"),
             ])
@@ -157,17 +165,17 @@ def generate_onboarding_report(output_path, data):
     story.append(Paragraph("RISK ALIGNMENT", s_section))
     story.append(Paragraph("Does your portfolio match your goals?", s_heading))
     story.append(Paragraph(
-        f"Based on your stated risk tolerance of <b>{d['risk_tolerance']}</b>, we would expect "
-        f"your portfolio to have an annualized volatility near <b>{d['target_vol']*100:.0f}%</b>. "
-        f"Your current portfolio shows a volatility of <b>{d['actual_vol']*100:.1f}%</b>. "
-        f"The gauge below shows where you stand.",
+        f"Your stated risk tolerance is <b>{escape(str(d['risk_tolerance']))}</b> with a target "
+        f"annualized volatility of <b>{d['target_vol']*100:.0f}%</b>. Measured from its own "
+        f"price history, your current portfolio shows a volatility of "
+        f"<b>{d['actual_vol']*100:.1f}%</b>. The gauge below shows where you stand.",
         s_body))
 
     gauge_buf = make_risk_tolerance_gauge(d["actual_vol"] * 100, d["target_vol"] * 100)
     story.append(Image(gauge_buf, width=PAGE_WIDTH, height=PAGE_WIDTH * 0.29))
     story.append(Spacer(1, 6))
 
-    # Risk mismatch callout
+    # Risk mismatch callout (computed: actual vs stated target)
     mismatch = d["actual_vol"] - d["target_vol"]
     if abs(mismatch) > 0.02:
         direction = "more" if mismatch > 0 else "less"
@@ -183,9 +191,21 @@ def generate_onboarding_report(output_path, data):
             "<b>Good alignment:</b> Your portfolio risk is well-matched to your stated tolerance.",
         ))
 
+    story.append(Spacer(1, 8))
+    story.append(metrics_row([
+        metric_card(f"{d['actual_vol']*100:.1f}%", "Actual volatility", CORAL),
+        metric_card(f"{d['target_vol']*100:.0f}%", "Target volatility", BLUE),
+        metric_card(f"{d['sharpe']:.2f}", "Sharpe ratio", TEAL),
+        metric_card(f"{d['max_drawdown']*100:.1f}%", "Max drawdown"),
+    ]))
     story.append(Spacer(1, 10))
 
-    # Key findings
+    if narrative.get("risk_profile_summary"):
+        story.append(Paragraph("Your risk profile in plain terms", s_subheading))
+        story.append(Paragraph(escape(narrative["risk_profile_summary"]), s_body_sm))
+        story.append(Spacer(1, 6))
+
+    # Key findings (computed by the router from the measured metrics)
     story.append(Paragraph("KEY FINDINGS", s_section))
     story.append(Paragraph("What we found in your portfolio", s_subheading))
     for i, finding in enumerate(d.get("risk_findings", []), 1):
@@ -193,79 +213,56 @@ def generate_onboarding_report(output_path, data):
 
     story.append(PageBreak())
 
-    # Page 3: Allocation Comparison
-    story.append(Paragraph("ALLOCATION ANALYSIS", s_section))
-    story.append(Paragraph("Current vs. recommended allocation", s_heading))
+    # Page 3: Current allocation (as it stands; no invented recommendation)
+    story.append(Paragraph("CURRENT ALLOCATION", s_section))
+    story.append(Paragraph("How the portfolio is invested today", s_heading))
+    story.append(Paragraph(
+        "The chart below shows the portfolio as it currently stands, grouped by asset type. "
+        "This report does not include a model-generated target allocation; any reallocation "
+        "would be developed and agreed with your advisor.",
+        s_body))
 
-    alloc_buf = make_allocation_comparison(d["current_allocation"], d["recommended_allocation"])
-    story.append(Image(alloc_buf, width=PAGE_WIDTH, height=PAGE_WIDTH * 0.35))
-    story.append(Spacer(1, 8))
+    if d.get("current_allocation"):
+        alloc_buf = make_allocation_chart(d["current_allocation"])
+        story.append(Image(alloc_buf, width=PAGE_WIDTH, height=PAGE_WIDTH * 0.32))
+        story.append(Spacer(1, 8))
 
     # Holdings table
     story.append(Paragraph("Current holdings", s_subheading))
-    h_data = [["Ticker", "Name", "Sector", "Weight", "Value"]]
+    h_data = [["Ticker", "Name", "Type", "Weight", "Value"]]
     for h in d["holdings"]:
-        h_data.append([h["ticker"], h["name"], h["sector"],
+        h_data.append([h["ticker"], h["name"], h.get("asset_type", "Equity"),
                        f"{h['weight']*100:.0f}%", f"${h['value']:,.0f}"])
 
     story.append(styled_table(h_data, [0.10, 0.32, 0.20, 0.14, 0.24]))
     story.append(Spacer(1, 14))
 
-    # Next steps
-    story.append(Paragraph("RECOMMENDED NEXT STEPS", s_section))
-    story.append(Paragraph("Action plan", s_subheading))
-    for i, step in enumerate(d.get("next_steps", []), 1):
-        story.append(Paragraph(f"<b>{i}.</b>  {step}", s_body))
+    # AI narrative: what to watch + options to evaluate (replaces the old
+    # canned "recommended next steps" boilerplate; omitted when unavailable).
+    if narrative.get("what_to_watch"):
+        story.append(Paragraph("WHAT TO WATCH", s_section))
+        story.append(Paragraph("Numbers worth monitoring as we start", s_subheading))
+        story.append(Paragraph(escape(narrative["what_to_watch"]), s_body_sm))
+        story.append(Spacer(1, 8))
+
+    if narrative.get("considerations"):
+        story.append(Paragraph("CONSIDERATIONS", s_section))
+        story.append(Paragraph("Model-derived observations to evaluate", s_subheading))
+        for c in narrative["considerations"]:
+            story.append(Paragraph(f"•  {escape(c)}", s_body_sm))
+
+    if any(narrative.get(k) for k in ("risk_profile_summary", "what_to_watch", "considerations")):
+        story.append(Spacer(1, 6))
+        story.append(Paragraph(
+            "Narrative commentary in this assessment was AI-generated strictly from the "
+            "computed figures shown in this document. It is informational only, is not "
+            "investment advice, and lists options for the advisor's professional evaluation, "
+            "not instructions to transact.",
+            s_disclaimer,
+        ))
 
     # Disclaimer
     story.extend(standard_disclaimer(d["firm_name"], d["advisor_name"]))
 
     doc.build(story, onFirstPage=on_first, onLaterPages=on_later)
     return output_path
-
-
-# ── DEMO ──
-if __name__ == "__main__":
-    demo = {
-        "client_name": "David & Maria Chen",
-        "advisor_name": "Sarah Mitchell, CFA",
-        "firm_name": "Meridian Wealth Advisors",
-        "report_date": datetime(2026, 3, 16),
-        "portfolio_value": 1_850_000,
-        "risk_tolerance": "Moderate",
-        "target_vol": 0.10,
-        "actual_vol": 0.145,
-        "sharpe": 0.68,
-        "max_drawdown": -0.182,
-        "holdings": [
-            {"ticker": "QQQ",  "name": "Invesco QQQ Trust",       "sector": "US Equity",    "weight": 0.40, "value": 740000},
-            {"ticker": "AAPL", "name": "Apple Inc.",               "sector": "US Equity",    "weight": 0.15, "value": 277500},
-            {"ticker": "TSLA", "name": "Tesla Inc.",               "sector": "US Equity",    "weight": 0.10, "value": 185000},
-            {"ticker": "BND",  "name": "Vanguard Total Bond",     "sector": "Fixed Income", "weight": 0.20, "value": 370000},
-            {"ticker": "VNQ",  "name": "Vanguard Real Estate",    "sector": "Real Estate",  "weight": 0.15, "value": 277500},
-        ],
-        "current_allocation": {
-            "US Equity": 0.65, "Fixed Income": 0.20, "Real Estate": 0.15,
-            "Intl Equity": 0.0, "Commodities": 0.0,
-        },
-        "recommended_allocation": {
-            "US Equity": 0.35, "Fixed Income": 0.30, "Real Estate": 0.10,
-            "Intl Equity": 0.15, "Commodities": 0.10,
-        },
-        "risk_findings": [
-            "Portfolio is <b>45% more volatile</b> than your target due to concentration in tech equities (QQQ + AAPL + TSLA = 65%).",
-            "Single-stock risk: AAPL and TSLA together represent 25% of assets, creating significant idiosyncratic exposure.",
-            "No international diversification — 0% allocation to non-US markets vs. a recommended 15%.",
-            "Fixed income allocation (20%) is below the 30% recommended for a moderate risk profile.",
-            "Real estate at 15% is appropriate and provides inflation protection.",
-        ],
-        "next_steps": [
-            "Reduce single-stock concentration by trimming AAPL and TSLA to a combined 8% maximum.",
-            "Add international equity exposure (VXUS or similar) at 15% target weight.",
-            "Increase bond allocation from 20% to 30% using intermediate-term core bonds.",
-            "Add commodity/inflation hedge (GLD, VTIP) at 10% for tail-risk protection.",
-            "Schedule 60-day follow-up to review transition progress and rerun risk analysis.",
-        ],
-    }
-    generate_onboarding_report("/home/claude/reports/onboarding_report.pdf", demo)
-    print("Onboarding report generated.")

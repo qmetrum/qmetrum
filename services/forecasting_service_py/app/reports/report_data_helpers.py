@@ -1,5 +1,5 @@
 """
-report_data_helpers.py — Centralized functions replacing all np.random data in reports.
+report_data_helpers.py: Centralized functions replacing all np.random data in reports.
 
 Every function here returns real data computed from MarketData / AssetVolatilitySnapshot
 tables. If data is unavailable, functions return sensible fallbacks (zeros, empty lists)
@@ -32,16 +32,17 @@ FALLBACK_BENCHMARKS = ["SPY", "VOO"]
 # Benchmark series
 # ──────────────────────────────────────────────────────────────
 
-def get_benchmark_series(
+def get_benchmark_series_labeled(
     symbol: str,
     start: datetime,
     end: datetime,
     session: Session,
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, Optional[str]]:
     """
-    Fetch daily close prices for a benchmark from MarketData.
-    Returns DataFrame with columns ['date', 'close'] sorted by date.
-    Falls back to alternative benchmark symbols if primary has no data.
+    Fetch daily close prices for a benchmark from MarketData, falling back to
+    alternative benchmark symbols if the primary has no data. Also returns
+    WHICH symbol actually supplied the data (None when nothing matched), so
+    report labels can be honest about silent fallbacks to proxy ETFs.
     """
     candidates = [symbol] + [s for s in FALLBACK_BENCHMARKS if s != symbol]
 
@@ -56,10 +57,25 @@ def get_benchmark_series(
         if rows:
             df = pd.DataFrame([{"date": r.date, "close": r.close} for r in rows])
             df["date"] = pd.to_datetime(df["date"])
-            return df
+            return df, candidate
 
-    # No data found — return empty DataFrame
-    return pd.DataFrame(columns=["date", "close"])
+    # No data found: return empty DataFrame
+    return pd.DataFrame(columns=["date", "close"]), None
+
+
+def get_benchmark_series(
+    symbol: str,
+    start: datetime,
+    end: datetime,
+    session: Session,
+) -> pd.DataFrame:
+    """
+    Fetch daily close prices for a benchmark from MarketData.
+    Returns DataFrame with columns ['date', 'close'] sorted by date.
+    Falls back to alternative benchmark symbols if primary has no data.
+    """
+    df, _ = get_benchmark_series_labeled(symbol, start, end, session)
+    return df
 
 
 def get_benchmark_returns(
