@@ -317,6 +317,7 @@ class ScenarioExplainRequest(BaseModel):
 
 
 class ScenarioExplainResponse(BaseModel):
+    summary: str  # executive comparison across the whole set
     explanations: list[dict[str, Any]]  # {name, headline, narrative}
     disclaimer: str
     cached: bool
@@ -340,7 +341,7 @@ def scenario_explain_endpoint(payload: ScenarioExplainRequest):
     if not scenarios_data:
         raise HTTPException(status_code=400, detail="at least one scenario is required")
     try:
-        explanations, facts, result = scenario_explainer.run(
+        summary, explanations, facts, result = scenario_explainer.run(
             portfolio_name=payload.portfolio_name,
             portfolio_value=payload.portfolio_value,
             scenarios=scenarios_data,
@@ -362,6 +363,7 @@ def scenario_explain_endpoint(payload: ScenarioExplainRequest):
         for f in facts
     ]
     return ScenarioExplainResponse(
+        summary=summary,
         explanations=explanations,
         disclaimer=DISCLAIMER,
         cached=result.cached,

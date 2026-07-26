@@ -35,6 +35,7 @@ type FanWithExtras = ScenarioFan & {
 };
 
 export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, scenarios }: Props) {
+  const [summary, setSummary] = useState<string | null>(null);
   const [explanations, setExplanations] = useState<ScenarioExplanation[] | null>(null);
   const [cached, setCached] = useState<boolean | null>(null);
   const [model, setModel] = useState<string | null>(null);
@@ -97,6 +98,7 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
   const mutation = useMutation({
     mutationFn: () => agentsApi.explainScenarios(buildPayload()),
     onSuccess: (res) => {
+      setSummary(res.summary || null);
       setExplanations(res.explanations);
       setCached(res.cached);
       setModel(res.model);
@@ -119,18 +121,19 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
 
   return (
     <AgentCard
-      title="AI Scenario Explainer"
+      title="AI Scenario Analysis"
       subtitle={
         disabled
-          ? "Run scenarios first, then generate a description of each one."
+          ? "Run scenarios first, then generate the analysis."
           : eligible.length > MAX_SCENARIOS
-            ? `What each scenario models and shows — explaining ${batch.length} of ${eligible.length} scenarios (limit ${MAX_SCENARIOS}).`
-            : "What each scenario models and what its simulated paths show."
+            ? `Executive summary plus what each scenario shows — analysing ${batch.length} of ${eligible.length} scenarios (limit ${MAX_SCENARIOS}).`
+            : "Executive summary plus what each scenario models and shows, grounded in the simulated paths."
       }
       onRun={() => mutation.mutate()}
       isPending={mutation.isPending}
-      runLabel="Explain each"
+      runLabel="Analyse"
       disabled={disabled}
+      markdown={summary}
       error={errorMessage}
       sourceData={sourceData}
       cached={cached}
@@ -138,6 +141,9 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
     >
       {explanations && (
         <div className="space-y-4">
+          <p className="border-t border-[var(--card-border)] pt-3 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+            Per-scenario breakdown
+          </p>
           {explanations.map((e, i) => (
             <div key={`${e.name}-${i}`} className="border-l-2 pl-3" style={{ borderColor: colourFor(e.name) }}>
               <div className="flex items-center gap-2">

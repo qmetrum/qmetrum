@@ -44,7 +44,7 @@ def _fake(text: str) -> LlmResult:
 
 
 def _payload(names):
-    return json.dumps({"explanations": [
+    return json.dumps({"summary": "exec-summary", "explanations": [
         {"name": n, "headline": f"h-{n}", "narrative": f"n-{n}"} for n in names
     ]})
 
@@ -106,7 +106,7 @@ def test_run_single_batched_call_and_alignment():
         return _fake(_payload(["worst_case_cvar", "base", "bear_10", "high_vol_regime"]))
 
     with patch.object(se, "generate", side_effect=_capture):
-        explanations, facts, result = se.run(
+        summary, explanations, facts, result = se.run(
             portfolio_name="P", portfolio_value=500_000, scenarios=SCENARIOS)
     assert len(calls) == 1                       # ONE batched call for the whole set
     assert [e["name"] for e in explanations] == [s["name"] for s in SCENARIOS]
@@ -156,7 +156,7 @@ def test_run_never_misattributes_on_dropped_entry():
     # that slot must be skipped, not steal another scenario's narrative.
     names = [s["name"] for s in SCENARIOS]
     with patch.object(se, "generate", return_value=_fake(_payload(names[1:]))):
-        explanations, _, _ = se.run(portfolio_name="P", portfolio_value=1.0, scenarios=SCENARIOS)
+        _, explanations, _, _ = se.run(portfolio_name="P", portfolio_value=1.0, scenarios=SCENARIOS)
     got = {e["name"]: e for e in explanations}
     assert "base" not in got                     # dropped, not borrowed
     for n in names[1:]:
@@ -173,7 +173,7 @@ def test_run_duplicate_names_do_not_collapse():
         {"name": "dup", "headline": "down", "narrative": "falls"},
     ]})
     with patch.object(se, "generate", return_value=_fake(two)):
-        explanations, _, _ = se.run(portfolio_name="P", portfolio_value=1.0, scenarios=dups)
+        _, explanations, _, _ = se.run(portfolio_name="P", portfolio_value=1.0, scenarios=dups)
     assert [e["headline"] for e in explanations] == ["up", "down"]
 
 
@@ -184,7 +184,7 @@ def test_run_tolerates_bare_array_output():
         {"name": s["name"], "headline": f"h-{s['name']}", "narrative": "n"} for s in SCENARIOS
     ])
     with patch.object(se, "generate", return_value=_fake(bare)):
-        explanations, _, _ = se.run(portfolio_name="P", portfolio_value=1.0, scenarios=SCENARIOS)
+        _, explanations, _, _ = se.run(portfolio_name="P", portfolio_value=1.0, scenarios=SCENARIOS)
     assert [e["name"] for e in explanations] == [s["name"] for s in SCENARIOS]
 
 
@@ -230,6 +230,7 @@ def test_endpoint_explains_each_scenario(client):
     assert r.status_code == 200, r.text
     body = r.json()
     assert [e["name"] for e in body["explanations"]] == [s["name"] for s in SCENARIOS]
+    assert body["summary"] == "exec-summary"
     assert body["disclaimer"]
     # source_data carries derived facts, not raw path arrays
     src = body["source_data"]["scenarios"]

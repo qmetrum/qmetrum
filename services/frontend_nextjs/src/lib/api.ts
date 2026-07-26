@@ -708,6 +708,7 @@ export type ScenarioExplanation = {
 };
 
 export type ScenarioExplainResponse = {
+  summary: string;
   explanations: ScenarioExplanation[];
   disclaimer: string;
   cached: boolean;
@@ -762,25 +763,6 @@ export const agentsApi = {
       latency_ms: number;
       source_data: Record<string, unknown>;
     }>(`/agents/alert-explain/${alertId}`)).data,
-
-  summarizeScenarios: async (payload: {
-    portfolio_name: string;
-    portfolio_value: number;
-    scenarios: Array<{
-      name: string;
-      shock_pct?: number;
-      vol_scale?: number;
-      drift_shift?: number;
-      return_pct: number;
-      dollar_impact: number;
-    }>;
-  }) =>
-    (await api.post<{
-      summary: string;
-      cached: boolean;
-      latency_ms: number;
-      source_data: Record<string, unknown>;
-    }>(`/agents/scenario-summary`, payload)).data,
 
   explainScenarios: async (payload: {
     portfolio_name: string;

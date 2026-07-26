@@ -28,9 +28,11 @@ For EACH scenario below, explain what the scenario models and what its simulated
 - Simulated results over the horizon: the median (p50) path's start/end level and return, the return of its end level vs the BASE scenario's end level, the estimated dollar impact at that relative return, pessimistic and optimistic tail end levels (2.5th/5th and 97.5th/95th percentile paths), the width of the 95% band at the horizon (uncertainty), and the lowest point on the median path.
 - For the machine-discovered adversarial scenario (worst_case_cvar): the per-asset shock attribution and the tail-loss measure (CVaR) that a gradient search minimized using the portfolio's cross-asset dependence model.
 
-Write for each scenario:
-- headline: ONE sentence — what this scenario is and its bottom line for the portfolio.
-- narrative: 2-4 sentences — what the setup means in plain terms, what the simulation shows (median outcome, tails, dollar impact), and what distinguishes this scenario (e.g. under a volatility regime the median barely moves but the band widens; the adversarial case names which assets drive the loss).
+Write:
+- summary: a 3-5 sentence executive paragraph comparing outcomes ACROSS the whole set — best vs worst case with the worst case's dollar impact, whether the downside is driven by price shocks or volatility, and what the adversarial scenario adds if present.
+- For each scenario:
+  - headline: ONE sentence — what this scenario is and its bottom line for the portfolio.
+  - narrative: 2-4 sentences — what the setup means in plain terms, what the simulation shows (median outcome, tails, dollar impact), and what distinguishes this scenario (e.g. under a volatility regime the median barely moves but the band widens; the adversarial case names which assets drive the loss).
 
 Rules:
 - Use ONLY the supplied numbers. Never invent figures.
@@ -38,7 +40,7 @@ Rules:
 - Treat "base" as the no-shock reference the other scenarios are compared against.
 - Do NOT make trade recommendations or price targets.
 
-Return JSON: {"explanations": [{"name", "headline", "narrative"}, ...]} with EXACTLY one entry per scenario, in the SAME ORDER, using the EXACT scenario names given.
+Return JSON: {"summary": "...", "explanations": [{"name", "headline", "narrative"}, ...]} with EXACTLY one explanation per scenario, in the SAME ORDER, using the EXACT scenario names given.
 """
 
 
@@ -49,6 +51,7 @@ class ScenarioExplanation(BaseModel):
 
 
 class ScenarioExplanations(BaseModel):
+    summary: str
     explanations: list[ScenarioExplanation]
 
 
@@ -227,10 +230,11 @@ def run(
     portfolio_name: str,
     portfolio_value: float,
     scenarios: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], LlmResult]:
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], LlmResult]:
     """Explain every scenario in one batched structured call.
 
-    Returns (explanations aligned to input order, derived facts, LlmResult).
+    Returns (executive summary, explanations aligned to input order,
+    derived facts, LlmResult).
     """
     facts = derive_facts(scenarios, portfolio_value)
     prompt = build_prompt(portfolio_name, portfolio_value, facts)
@@ -262,8 +266,10 @@ def run(
     # Tolerate the classic wrapper-dropping failure (bare top-level array);
     # anything else non-dict is malformed output.
     if isinstance(parsed, list):
+        summary = ""
         raw = parsed
     elif isinstance(parsed, dict):
+        summary = str(parsed.get("summary") or "")
         raw = parsed.get("explanations") or []
     else:
         raise ValueError("scenario explainer returned malformed JSON: not an object or array")
@@ -292,4 +298,4 @@ def run(
             )
     if not aligned:
         raise ValueError("scenario explainer returned no explanations")
-    return aligned, facts, result
+    return summary, aligned, facts, result

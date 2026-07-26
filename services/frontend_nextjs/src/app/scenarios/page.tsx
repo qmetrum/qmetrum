@@ -20,7 +20,6 @@ import {
   DISPLAY_NAMES,
   ScenarioPathsChart,
 } from "@/components/charts/ScenarioPathsChart";
-import { ScenarioSummaryCard } from "@/components/shared/ScenarioSummaryCard";
 import { ScenarioExplainerCard } from "@/components/shared/ScenarioExplainerCard";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
@@ -552,40 +551,6 @@ export default function ScenariosPage() {
             </div>
           </div>
 
-          {/* AI Executive Summary */}
-          {results && comparisonData.length > 0 && (
-            <ScenarioSummaryCard
-              key={`summary-${runId}`}
-              portfolioName={
-                (portfolios ?? []).find((p: PortfolioResponse) => String(p.portfolio_id) === selectedPortfolio)?.name
-                  ?? `Portfolio #${selectedPortfolio}`
-              }
-              portfolioValue={portfolioValue}
-              scenarios={comparisonData.map((c) => ({
-                name: c.name,
-                shock_pct: specByName.get(c.key)?.shock,
-                vol_scale: specByName.get(c.key)?.volScale,
-                drift_shift: specByName.get(c.key)?.drift,
-                return_pct: c.return,
-                dollar_impact: c.dollarImpact,
-              }))}
-            />
-          )}
-
-          {/* AI per-scenario explainer — grounded in the simulated fans */}
-          {fanResults && Object.keys(fanResults).length > 0 && (
-            <ScenarioExplainerCard
-              key={`explainer-${runId}`}
-              portfolioName={
-                (portfolios ?? []).find((p: PortfolioResponse) => String(p.portfolio_id) === selectedPortfolio)?.name
-                  ?? `Portfolio #${selectedPortfolio}`
-              }
-              portfolioValue={portfolioValue}
-              fans={fanResults}
-              scenarios={scenarios}
-            />
-          )}
-
           {/* Comparison Chart */}
           <div className="q-card p-5">
             <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
@@ -695,6 +660,21 @@ export default function ScenariosPage() {
               ))}
             </div>
           </div>
+
+          {/* AI Scenario Analysis — executive summary + per-scenario breakdown,
+              one batched call grounded in the simulated fans */}
+          {fanResults && Object.keys(fanResults).length > 0 && (
+            <ScenarioExplainerCard
+              key={`analysis-${runId}`}
+              portfolioName={
+                (portfolios ?? []).find((p: PortfolioResponse) => String(p.portfolio_id) === selectedPortfolio)?.name
+                  ?? `Portfolio #${selectedPortfolio}`
+              }
+              portfolioValue={portfolioValue}
+              fans={fanResults}
+              scenarios={scenarios}
+            />
+          )}
         </div>
       </div>
     </div>
