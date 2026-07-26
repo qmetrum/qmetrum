@@ -34,6 +34,61 @@ type FanWithExtras = ScenarioFan & {
   _discovery?: Record<string, unknown>;
 };
 
+export type ScenarioItemPayload = {
+  name: string;
+  shock_pct?: number;
+  vol_scale?: number;
+  drift_shift?: number;
+  fan: ScenarioFan & { p5?: number[]; p95?: number[] };
+  discovery?: Record<string, unknown>;
+};
+
+/** Build the scenario items both the AI analysis and the PDF report send:
+ *  eligible fans (skipping audit keys), capped at the backend limit with the
+ *  adversarial scenario always retained. */
+export function buildScenarioItems(
+  fans: Record<string, ScenarioFan | unknown>,
+  specs: ScenarioSpec[],
+  max = 12,
+): ScenarioItemPayload[] {
+  const specByName = new Map(specs.map((s) => [s.name, s]));
+  const eligible = Object.entries(fans).filter(
+    ([k, v]) =>
+      !k.startsWith("_") &&
+      v != null &&
+      typeof v === "object" &&
+      Array.isArray((v as ScenarioFan).central) &&
+      (v as ScenarioFan).central.length >= 2,
+  );
+  const batch =
+    eligible.length <= max
+      ? eligible
+      : [
+          ...eligible
+            .filter(([k]) => k !== "worst_case_cvar")
+            .slice(0, max - (eligible.some(([k]) => k === "worst_case_cvar") ? 1 : 0)),
+          ...eligible.filter(([k]) => k === "worst_case_cvar"),
+        ];
+  return batch.map(([name, v]) => {
+    const fan = v as FanWithExtras;
+    const spec = specByName.get(name);
+    return {
+      name: name.slice(0, 200),
+      ...(spec ? { shock_pct: spec.shock, vol_scale: spec.volScale, drift_shift: spec.drift } : {}),
+      fan: {
+        central: fan.central,
+        lower_1s: fan.lower_1s,
+        upper_1s: fan.upper_1s,
+        lower_2s: fan.lower_2s,
+        upper_2s: fan.upper_2s,
+        p5: fan.p5,
+        p95: fan.p95,
+      },
+      ...(fan._discovery ? { discovery: fan._discovery } : {}),
+    };
+  });
+}
+
 export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, scenarios }: Props) {
   const [summary, setSummary] = useState<string | null>(null);
   const [explanations, setExplanations] = useState<ScenarioExplanation[] | null>(null);
@@ -57,42 +112,12 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
       (v as ScenarioFan).central.length >= 2,
   );
 
-  // When capping, always keep the server-discovered adversarial scenario —
-  // it is the one with per-asset attribution, and the server appends it LAST
-  // so a plain slice would drop exactly that one first.
-  const batch =
-    eligible.length <= MAX_SCENARIOS
-      ? eligible
-      : [
-          ...eligible
-            .filter(([k]) => k !== "worst_case_cvar")
-            .slice(0, MAX_SCENARIOS - (eligible.some(([k]) => k === "worst_case_cvar") ? 1 : 0)),
-          ...eligible.filter(([k]) => k === "worst_case_cvar"),
-        ];
+  const items = buildScenarioItems(fans, scenarios, MAX_SCENARIOS);
 
   const buildPayload = () => ({
     portfolio_name: portfolioName.slice(0, 200),
     portfolio_value: portfolioValue,
-    scenarios: batch.map(([name, v]) => {
-      const fan = v as FanWithExtras;
-      const spec = specByName.get(name);
-      return {
-        name: name.slice(0, 200),
-        ...(spec
-          ? { shock_pct: spec.shock, vol_scale: spec.volScale, drift_shift: spec.drift }
-          : {}),
-        fan: {
-          central: fan.central,
-          lower_1s: fan.lower_1s,
-          upper_1s: fan.upper_1s,
-          lower_2s: fan.lower_2s,
-          upper_2s: fan.upper_2s,
-          p5: fan.p5,
-          p95: fan.p95,
-        },
-        ...(fan._discovery ? { discovery: fan._discovery } : {}),
-      };
-    }),
+    scenarios: items,
   });
 
   const mutation = useMutation({
@@ -126,7 +151,7 @@ export function ScenarioExplainerCard({ portfolioName, portfolioValue, fans, sce
         disabled
           ? "Run scenarios first, then generate the analysis."
           : eligible.length > MAX_SCENARIOS
-            ? `Executive summary plus what each scenario shows — analysing ${batch.length} of ${eligible.length} scenarios (limit ${MAX_SCENARIOS}).`
+            ? `Executive summary plus what each scenario shows — analysing ${items.length} of ${eligible.length} scenarios (limit ${MAX_SCENARIOS}).`
             : "Executive summary plus what each scenario models and shows, grounded in the simulated paths."
       }
       onRun={() => mutation.mutate()}

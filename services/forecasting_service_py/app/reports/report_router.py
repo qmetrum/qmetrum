@@ -37,6 +37,7 @@ from app.services.market_store import get_price_series_cached, get_fundamentals_
 from app.services.risk_client import calculate_risk
 from app.db.database import engine
 from app.db.models import User, Portfolio, Position, PortfolioReportDataCache
+from app.agents import scenario_explainer
 from app.reports.report_data_helpers import (
     compute_asset_contributions,
     compute_monthly_benchmark_returns,
@@ -77,6 +78,17 @@ class ReportAsset(BaseModel):
     ticker: str
     weight: float
 
+class ReportScenarioItem(BaseModel):
+    """A scenario the client already simulated (same shape the AI scenario
+    endpoints use): knobs + the fan percentiles + adversarial discovery."""
+    name: str
+    shock_pct: Optional[float] = None
+    vol_scale: Optional[float] = None
+    drift_shift: Optional[float] = None
+    fan: dict
+    discovery: Optional[dict] = None
+
+
 class QuarterlyReportRequest(BaseModel):
     """Full risk intelligence report (the flagship report)."""
     client_name: str
@@ -84,7 +96,10 @@ class QuarterlyReportRequest(BaseModel):
     firm_name: str
     assets: List[ReportAsset]
     horizon_days: int = 90
-    portfolio_value: Optional[float] = None  # if None, computed from prices
+    portfolio_value: Optional[float] = None  # REQUIRED at the endpoint — never invented
+    # Real simulated scenarios from the Scenario Builder run; when absent the
+    # report simply omits the scenario section (it never fabricates one).
+    scenarios: Optional[List[ReportScenarioItem]] = None
 
 class OnboardingReportRequest(BaseModel):
     """New client risk assessment."""
@@ -150,6 +165,32 @@ def _resolve_user(user_id: Optional[int], x_user_id: Optional[int]) -> int:
     return DEFAULT_USER_ID
 
 
+
+def _require_portfolio_value(value, label: str = "portfolio_value") -> float:
+    """Dollar figures must come from the caller — never invent an AUM."""
+    if value is None or float(value) <= 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{label} is required — reports never invent portfolio values.",
+        )
+    return float(value)
+
+
+def _cached_blob_matches(blob: dict, assets: List[ReportAsset]) -> bool:
+    """A cached blob is only valid for the SAME portfolio: same ticker set AND
+    same normalized weights (2% tolerance). A tickers-only match can silently
+    report another portfolio's numbers under this client's name."""
+    cached_w = blob.get("weights") or {}
+    requested = {a.ticker.upper(): float(a.weight or 0.0) for a in assets}
+    total = sum(requested.values())
+    if total <= 0 or set(requested) != set(cached_w):
+        return False
+    return all(
+        abs(w / total - float(cached_w.get(t, 0.0))) <= 0.02
+        for t, w in requested.items()
+    )
+
+
 def _try_cached_portfolio_data(
     assets: List[ReportAsset],
     portfolio_id: Optional[int] = None,
@@ -164,24 +205,17 @@ def _try_cached_portfolio_data(
                     .where(PortfolioReportDataCache.portfolio_id == portfolio_id)
                     .order_by(PortfolioReportDataCache.updated_at.desc())
                 ).first()
-                if cached and cached.result_blob:
-                    cached_tickers = set(cached.result_blob.get("tickers", []))
-                    requested_tickers = set(a.ticker.upper() for a in assets)
-                    if requested_tickers.issubset(cached_tickers):
-                        logger.info(f"Portfolio {portfolio_id} report served from cache")
-                        return _prepare_cached_result(cached.result_blob)
+                if cached and cached.result_blob and _cached_blob_matches(cached.result_blob, assets):
+                    logger.info(f"Portfolio {portfolio_id} report served from cache")
+                    return _prepare_cached_result(cached.result_blob)
             else:
-                # No portfolio_id — scan all cached portfolios for a ticker match
-                requested_tickers = set(a.ticker.upper() for a in assets)
+                # No portfolio_id — scan all cached portfolios for a full match
                 all_cached = session.exec(
                     select(PortfolioReportDataCache)
                     .order_by(PortfolioReportDataCache.updated_at.desc())
                 ).all()
                 for cached in all_cached:
-                    if not cached.result_blob:
-                        continue
-                    cached_tickers = set(cached.result_blob.get("tickers", []))
-                    if requested_tickers == cached_tickers:
+                    if cached.result_blob and _cached_blob_matches(cached.result_blob, assets):
                         logger.info(f"Ad-hoc report matched cached portfolio {cached.portfolio_id}")
                         return _prepare_cached_result(cached.result_blob)
     except Exception as e:
@@ -483,10 +517,45 @@ def generate_quarterly(
     # Fetch live data from your engine
     data = _fetch_portfolio_data(payload.assets, horizon_days=payload.horizon_days)
 
-    portfolio_value = payload.portfolio_value or sum(
-        get_price_series_cached(a.ticker)[-1]["price"] * a.weight * 100000
-        for a in payload.assets
-    )
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
+
+    # Real scenario section: derived from the client's simulated fans; the AI
+    # narrative reuses the scenario explainer (content-hash cached, so a page
+    # that already ran the analysis costs nothing here). Failures degrade to a
+    # numbers-only section — never to invented numbers.
+    scenario_rows: list = []
+    scenario_analysis = None
+    scenario_items = [
+        i.model_dump() for i in (payload.scenarios or [])
+        if not i.name.startswith("_")
+        and isinstance(i.fan.get("central"), list) and len(i.fan["central"]) >= 2
+    ]
+    if scenario_items:
+        try:
+            facts = scenario_explainer.derive_facts(scenario_items, portfolio_value)
+            for f in facts:
+                ret = f["vs_base_pct"] if f["vs_base_pct"] is not None else f["path_return_pct"]
+                scenario_rows.append({
+                    "name": f["name"],
+                    "is_base": f["is_base"],
+                    "return_pct": ret,
+                    "dollar_impact": f["dollar_impact"],
+                    "downside_pct": f["downside_pct"],
+                    "band_pct": f["band_pct"],
+                })
+        except Exception as e:
+            logger.warning(f"Report scenario derivation failed: {e}")
+            scenario_rows = []
+        if scenario_rows:
+            try:
+                summary, explanations, _, _ = scenario_explainer.run(
+                    portfolio_name=payload.client_name,
+                    portfolio_value=portfolio_value,
+                    scenarios=scenario_items,
+                )
+                scenario_analysis = {"summary": summary, "explanations": explanations}
+            except Exception as e:
+                logger.warning(f"Report scenario AI analysis unavailable: {e}")
 
     # Build the template data dict
     # (This is where your engine output maps to the template's expected format)
@@ -511,12 +580,8 @@ def generate_quarterly(
         "risk_data": data["risk_data"],
         "portfolio_prices": data["portfolio_prices"],
         "portfolio_dates": data.get("dates", []),
-        "scenarios": [
-            {"name": "Base case",         "return_12m":  0.07, "drawdown": -0.08, "prob": 0.55, "color": TEAL},
-            {"name": "Mild recession",    "return_12m": -0.09, "drawdown": -0.18, "prob": 0.25, "color": AMBER},
-            {"name": "Severe downturn",   "return_12m": -0.23, "drawdown": -0.32, "prob": 0.12, "color": CORAL},
-            {"name": "Strong recovery",   "return_12m":  0.18, "drawdown": -0.06, "prob": 0.08, "color": BLUE},
-        ],
+        "scenarios": scenario_rows,
+        "scenario_analysis": scenario_analysis,
     }
 
     generate_quarterly_report(output_path, template_data)
@@ -539,7 +604,7 @@ def generate_onboarding(
     rm = data["risk_metrics"]
     actual_vol = rm["annualized_vol"]
 
-    portfolio_value = payload.portfolio_value or 1_000_000
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
 
     # Determine allocation breakdown
     sector_map = {}
@@ -654,7 +719,7 @@ def generate_event_report(
         "advisor_name": payload.advisor_name,
         "firm_name": payload.firm_name,
         "report_date": report_date,
-        "portfolio_value": payload.portfolio_value or 1_000_000,
+        "portfolio_value": _require_portfolio_value(payload.portfolio_value),
         "event_name": payload.event_name,
         "event_date": event_date,
         "event_summary": payload.event_summary,
@@ -702,7 +767,7 @@ def generate_rebalance_report(
     current_data = _fetch_portfolio_data(payload.current_assets)
     proposed_data = _fetch_portfolio_data(payload.proposed_assets)
 
-    portfolio_value = payload.portfolio_value or 1_000_000
+    portfolio_value = _require_portfolio_value(payload.portfolio_value)
 
     current_rm = current_data["risk_metrics"]
     proposed_rm = proposed_data["risk_metrics"]
@@ -837,8 +902,8 @@ def generate_year_end(
         "firm_name": payload.firm_name,
         "report_date": report_date,
         "review_year": payload.review_year,
-        "portfolio_value_start": payload.portfolio_value_start or 2_000_000,
-        "portfolio_value_end": payload.portfolio_value_end or 2_000_000 * (1 + ytd_return),
+        "portfolio_value_start": _require_portfolio_value(payload.portfolio_value_start, "portfolio_value_start"),
+        "portfolio_value_end": (float(payload.portfolio_value_end) if payload.portfolio_value_end else _require_portfolio_value(payload.portfolio_value_start, "portfolio_value_start") * (1 + ytd_return)),
         "portfolio_return_ytd": ytd_return,
         "benchmark_return_ytd": bench_ytd,
         "sharpe": rm["sharpe_ratio"],

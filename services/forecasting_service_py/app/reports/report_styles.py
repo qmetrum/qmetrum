@@ -211,7 +211,7 @@ def draw_cover_page(c, doc, *, firm_name, client_name, report_date,
     # Footer
     c.setFillColor(HexColor("#6B8DAE"))
     c.setFont("Helvetica", 8)
-    c.drawString(54, 76, f"Powered by Forecastium Risk Intelligence Engine")
+    c.drawString(54, 76, f"Powered by Qsight Risk Intelligence")
 
     c.setFillColor(HexColor("#1E3A5F"))
     c.roundRect(W - 180, 56, 126, 24, 4, fill=1, stroke=0)
@@ -258,7 +258,9 @@ def standard_disclaimer(firm_name, advisor_name):
             s_disclaimer,
         ),
         Paragraph(
-            f"{firm_name} is a registered investment adviser. The information contained herein "
+            # No regulatory-status claims — the platform cannot know the firm's
+            # registration status, and asserting one is a compliance liability.
+            f"This document was prepared by {firm_name}. The information contained herein "
             f"is confidential and intended solely for the use of the named client. "
             f"For questions, contact {advisor_name}.",
             s_disclaimer,

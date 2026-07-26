@@ -20,7 +20,7 @@ import {
   DISPLAY_NAMES,
   ScenarioPathsChart,
 } from "@/components/charts/ScenarioPathsChart";
-import { ScenarioExplainerCard } from "@/components/shared/ScenarioExplainerCard";
+import { ScenarioExplainerCard, buildScenarioItems } from "@/components/shared/ScenarioExplainerCard";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
 import {
@@ -246,6 +246,9 @@ export default function ScenariosPage() {
       firm_name: branding.firmName,
       assets: (p.assets ?? []).map((a) => ({ ticker: a.ticker, weight: a.weight ?? 0 })),
       portfolio_value: portfolioValue,
+      // Ground the PDF's scenario section in the run on screen; without a run
+      // the report omits the section instead of fabricating one.
+      ...(fanResults ? { scenarios: buildScenarioItems(fanResults, scenarios) } : {}),
     });
   }
 

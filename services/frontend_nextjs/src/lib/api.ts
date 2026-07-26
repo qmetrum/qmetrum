@@ -852,7 +852,18 @@ export type QuarterlyReportRequest = {
   firm_name: string;
   assets: ReportAsset[];
   horizon_days?: number;
+  // Required by the backend — reports never invent portfolio values.
   portfolio_value?: number | null;
+  // Real simulated scenarios from a Scenario Builder run; omitted -> the PDF
+  // omits its scenario section rather than fabricating one.
+  scenarios?: Array<{
+    name: string;
+    shock_pct?: number;
+    vol_scale?: number;
+    drift_shift?: number;
+    fan: ScenarioFan & { p5?: number[]; p95?: number[] };
+    discovery?: Record<string, unknown>;
+  }>;
 };
 
 export type OnboardingReportRequest = {
