@@ -22,8 +22,9 @@ from app.agents.llm import generate, LlmResult
 
 SYSTEM_PROMPT = """You are a buy-side risk analyst writing the narrative layer of a portfolio risk report for a financial advisor. You are given ONLY real computed facts about one portfolio. Write:
 
-- executive_summary: 3-5 sentences. What kind of portfolio this is, its headline risk posture (volatility, drawdown, regime), and the single most important thing the advisor should take away.
-- forecast_commentary: 2-4 sentences. What the median forecast path implies in return terms, how much confidence the interval width suggests, and what the current regime means for reliability.
+- executive_summary: 3-5 sentences. Lead with how the portfolio actually performed over the headline period and versus its benchmark if supplied (the number the client cares about first), then its risk posture (volatility, drawdown, regime), then the single most important takeaway.
+- performance_commentary: 2-4 sentences (only if performance facts are supplied, else empty string). How the portfolio did across the periods shown, how that compares to the benchmark (outperformed or lagged, by how much), and which holdings drove the result per the attribution, including an honest note if a large residual means much of the return is unexplained by the listed positions.
+- forecast_commentary: 2-4 sentences. What the median forecast path implies in return terms and, if an interval range is supplied, the plain dollar range it spans, plus what the current regime means for reliability.
 - risk_commentary: 3-5 sentences. Interpret the risk table: what VaR/CVaR mean in dollar terms for THIS portfolio value, whether the Sharpe/Sortino pairing suggests the return is worth the risk, what the drawdown and fragility numbers say, and why.
 - scenario_commentary: 2-4 sentences interpreting the scenario set as a whole (only if scenario facts are supplied): where the real downside comes from, and what the adversarial case reveals. Empty string if no scenarios supplied.
 - holdings_commentary: 2-3 sentences. Concentration, diversification, and what dominates the risk given the weights.
@@ -36,12 +37,13 @@ Rules:
 - These are model-derived observations for a professional to evaluate, not advice. No promises, no certainty language.
 - NEVER use em dashes or en dashes anywhere in the text. Use commas, colons, or periods instead.
 
-Return JSON with exactly those six fields.
+Return JSON with exactly those fields (performance_commentary included).
 """
 
 
 class ReportNarrative(BaseModel):
     executive_summary: str
+    performance_commentary: str = ""
     forecast_commentary: str
     risk_commentary: str
     scenario_commentary: str
@@ -85,17 +87,33 @@ def build_prompt(facts: dict[str, Any]) -> str:
         f"  VaR95 1-day {_pct(rm.get('var_95_daily'))}, CVaR95 {_pct(rm.get('cvar_95_daily'))}, "
         f"max drawdown {_pct(rm.get('max_drawdown'))}",
         f"  beta {rm.get('beta', 0):.2f}, fragility {rm.get('fragility_score', 0):.2f}, "
-        f"regime {rm.get('regime', 'Normal')}",
+        f"regime {str(rm.get('regime', 'Normal')).replace('_', ' ')}",
     ]
+    perf = facts.get("performance") or {}
+    if perf.get("periods"):
+        lines += ["", f"Realized performance (benchmark: {perf.get('benchmark_label') or 'none available'}):"]
+        for p in perf["periods"]:
+            b = p.get("benchmark")
+            rel = p.get("relative")
+            lines.append(
+                f"  {p['label']}: portfolio {p['portfolio'] * 100:+.1f}%"
+                + (f", benchmark {b * 100:+.1f}%, relative {rel * 100:+.1f}pp" if b is not None else ", benchmark n/a")
+            )
+        attr = perf.get("attribution") or []
+        if attr:
+            lines.append(f"  attribution over {perf.get('attribution_window')} (weight x return):")
+            for c in attr[:8]:
+                lines.append(f"    {c['ticker']}: weight {c['weight'] * 100:.0f}%, return {c['return'] * 100:+.1f}%, contribution {c['contribution'] * 100:+.1f}pp")
+            if perf.get("attribution_residual") is not None:
+                lines.append(f"    unexplained residual: {perf['attribution_residual'] * 100:+.1f}pp (return not captured by the listed positions)")
     fc = facts.get("forecast") or {}
     if fc.get("return_pct") is not None:
-        lines += [
-            "",
-            "Forecast (median path):",
-            f"  projected return over the horizon {fc['return_pct']:+.2f}%"
-            + (f", 95% interval width at horizon {fc['band_pct']:.1f}% of the median"
-               if fc.get("band_pct") is not None else ", no model interval available"),
-        ]
+        line = f"  projected return over the horizon {fc['return_pct']:+.2f}%"
+        if fc.get("range_low_pct") is not None and fc.get("range_high_pct") is not None:
+            line += f", likely range about {fc['range_low_pct']:+.1f}% to {fc['range_high_pct']:+.1f}%"
+        else:
+            line += ", no model interval available"
+        lines += ["", "Forecast (median path):", line]
     scen = facts.get("scenarios") or []
     if scen:
         lines += ["", "Scenario facts (simulated, vs the base scenario):"]
@@ -126,6 +144,10 @@ def run(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
             "vol": round(float(rm.get("annualized_vol") or 0), 4),
             "var": round(float(rm.get("var_95_daily") or 0), 4),
             "forecast_return": round(float((facts.get("forecast") or {}).get("return_pct") or 0), 2),
+            "perf": [
+                {"w": p["label"], "r": round(float(p["portfolio"]), 4)}
+                for p in ((facts.get("performance") or {}).get("periods") or [])
+            ],
             "scenarios": [
                 {"name": s["name"], "ret": round(float(s.get("return_pct") or 0), 2)}
                 for s in (facts.get("scenarios") or [])
@@ -140,8 +162,8 @@ def run(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
         raise ValueError("report narrator returned malformed JSON: not an object")
     out = {
         k: _strip_dashes(str(parsed.get(k) or ""))
-        for k in ("executive_summary", "forecast_commentary", "risk_commentary",
-                  "scenario_commentary", "holdings_commentary")
+        for k in ("executive_summary", "performance_commentary", "forecast_commentary",
+                  "risk_commentary", "scenario_commentary", "holdings_commentary")
     }
     out["considerations"] = [
         _strip_dashes(str(c)) for c in (parsed.get("considerations") or []) if str(c).strip()

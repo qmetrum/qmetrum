@@ -223,7 +223,7 @@ def generate_yearend_report(output_path, data):
         ]
     else:
         cover_metrics += [
-            ("REGIME", str(d.get("regime", "Normal"))),
+            ("REGIME", humanize_label(d.get("regime", "Normal"))),
             ("FRAGILITY", f"{d.get('fragility_score', 0):.2f}"),
         ]
 
@@ -392,7 +392,7 @@ def generate_yearend_report(output_path, data):
     story.append(Paragraph("Positioning context for the year ahead", s_heading))
     story.append(Paragraph(
         f"As of {d['report_date'].strftime('%B %d, %Y')}, the risk engine classifies "
-        f"the portfolio's regime as <b>{escape(str(d.get('regime', 'Normal')))}</b> "
+        f"the portfolio's regime as <b>{escape(humanize_label(d.get('regime', 'Normal')))}</b> "
         f"with a fragility score of <b>{d.get('fragility_score', 0):.2f}</b> (current "
         f"volatility relative to its long-term median; above 1.5 is flagged fragile).",
         s_body))

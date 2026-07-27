@@ -446,6 +446,114 @@ def _fetch_portfolio_data(assets: List[ReportAsset], horizon_days: int = 90, por
     }
 
 
+def _period_return_from_series(dates, prices, months):
+    """Trailing-`months` return from an aligned (dates, prices) series.
+    dates: list of 'YYYY-MM-DD'; prices: list of floats. None if the window is
+    not covered by the data."""
+    if not dates or not prices or len(dates) != len(prices) or len(prices) < 2:
+        return None
+    try:
+        end = pd.to_datetime(dates[-1])
+        cutoff = end - pd.DateOffset(months=months)
+        ds = pd.to_datetime(pd.Series(dates))
+    except (ValueError, TypeError):
+        return None
+    idx = ds.searchsorted(cutoff)
+    if idx >= len(prices) - 1:
+        return None
+    start_px = float(prices[idx])
+    if start_px <= 0:
+        return None
+    return float(prices[-1]) / start_px - 1.0
+
+
+def _performance_block(data: dict, session) -> Optional[dict]:
+    """Realized performance for the quarterly: multi-period portfolio returns,
+    the benchmark's matching returns, and per-holding contribution attribution
+    with an explicit residual so the parts reconcile to the whole.
+
+    Returns None when there is not enough real price history. Never fabricates.
+    """
+    dates = data.get("dates") or []
+    prices = data.get("portfolio_prices") or []
+    if len(dates) < 2 or len(prices) != len(dates):
+        return None
+
+    # Standard trailing windows; only those the data actually covers are shown.
+    windows = [("3-month", 3), ("6-month", 6), ("1-year", 12), ("2-year", 24)]
+    port_periods = {lbl: _period_return_from_series(dates, prices, m) for lbl, m in windows}
+    if not any(v is not None for v in port_periods.values()):
+        return None
+
+    # Benchmark over the same span, labeled honestly (proxy disclosed).
+    bench_label = None
+    bench_periods = {lbl: None for lbl, _ in windows}
+    try:
+        start = pd.to_datetime(dates[0]).to_pydatetime()
+        end = pd.to_datetime(dates[-1]).to_pydatetime()
+        bench_df, bench_symbol = get_benchmark_series_labeled(DEFAULT_BENCHMARK, start, end, session)
+        if not bench_df.empty and bench_symbol:
+            bench_df = bench_df.sort_values("date")
+            b_dates = [d.strftime("%Y-%m-%d") for d in bench_df["date"]]
+            b_prices = bench_df["close"].astype(float).tolist()
+            bench_periods = {lbl: _period_return_from_series(b_dates, b_prices, m) for lbl, m in windows}
+            proxy = "" if bench_symbol == DEFAULT_BENCHMARK else f" ({bench_symbol} proxy)"
+            bench_label = f"S&P 500{proxy}"
+    except Exception as e:
+        logger.warning(f"Quarterly benchmark block failed: {e}")
+
+    periods = []
+    for lbl, _ in windows:
+        pr = port_periods.get(lbl)
+        if pr is None:
+            continue
+        br = bench_periods.get(lbl)
+        periods.append({
+            "label": lbl,
+            "portfolio": pr,
+            "benchmark": br,
+            "relative": (pr - br) if br is not None else None,
+        })
+
+    # Attribution over the longest covered window, with a reconciling residual.
+    headline_lbl = periods[-1]["label"] if periods else "1-year"
+    headline_months = dict(windows)[headline_lbl]
+    a_end = pd.to_datetime(dates[-1])
+    a_start = (a_end - pd.DateOffset(months=headline_months)).to_pydatetime()
+    weights = data.get("weights", {})
+    contribs = []
+    for ticker, df in (data.get("price_data") or {}).items():
+        if df is None or not len(df):
+            continue
+        sd = df.copy()
+        sd["date"] = pd.to_datetime(sd["date"])
+        win = sd[(sd["date"] >= pd.Timestamp(a_start)) & (sd["date"] <= a_end)].sort_values("date")
+        if len(win) < 2 or float(win["price"].iloc[0]) <= 0:
+            continue
+        ret = float(win["price"].iloc[-1] / win["price"].iloc[0] - 1.0)
+        contribs.append({
+            "ticker": ticker,
+            "name": data.get("fundamentals", {}).get(ticker, {}).get("profile", {}).get("name", ticker),
+            "weight": float(weights.get(ticker, 0.0)),
+            "return": ret,
+            "contribution": ret * float(weights.get(ticker, 0.0)),
+        })
+    contribs.sort(key=lambda r: r["contribution"], reverse=True)
+    headline_port = dict((p["label"], p["portfolio"]) for p in periods).get(headline_lbl)
+    covered = sum(c["contribution"] for c in contribs)
+    residual = (headline_port - covered) if headline_port is not None else None
+
+    return {
+        "periods": periods,
+        "benchmark_label": bench_label,
+        "attribution": contribs,
+        "attribution_window": headline_lbl,
+        "attribution_headline": headline_port,
+        "attribution_residual": residual,
+        "return_basis": "Price-based, gross of advisory fees. Returns reflect price appreciation only, not dividends or cash flows.",
+    }
+
+
 def _pdf_response(filepath: str, filename: str) -> StreamingResponse:
     """Stream a PDF file as a download response."""
     def _stream():
@@ -790,6 +898,14 @@ def generate_quarterly(
     # Fetch live data from your engine
     data = _fetch_portfolio_data(payload.assets, horizon_days=payload.horizon_days)
 
+    # Realized performance spine (multi-period returns, benchmark, attribution).
+    perf_block = None
+    try:
+        with Session(engine) as _sess:
+            perf_block = _performance_block(data, _sess)
+    except Exception as e:
+        logger.warning(f"Quarterly performance block failed: {e}")
+
     # Real scenario section: derived from the client's simulated fans; the AI
     # narrative reuses the scenario explainer (content-hash cached, so a page
     # that already ran the analysis costs nothing here). Failures degrade to a
@@ -849,8 +965,10 @@ def generate_quarterly(
         if len(fp) >= 2 and fp[0]:
             fc_facts["return_pct"] = (fp[-1] / fp[0] - 1) * 100
             lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
-            if lo and hi and fp[-1]:
-                fc_facts["band_pct"] = (hi[-1] - lo[-1]) / fp[-1] * 100
+            if lo and hi and fp[0]:
+                # Plain return range a client can read, not "% of the median".
+                fc_facts["range_low_pct"] = (lo[-1] / fp[0] - 1) * 100
+                fc_facts["range_high_pct"] = (hi[-1] / fp[0] - 1) * 100
         narrative, _ = report_narrator.run(facts={
             "portfolio_name": payload.client_name,
             "portfolio_value": portfolio_value,
@@ -859,6 +977,7 @@ def generate_quarterly(
             "forecast": fc_facts,
             "scenarios": scenario_rows,
             "holdings": holdings_list,
+            "performance": perf_block,
         })
     except Exception as e:
         logger.warning(f"Report narrative unavailable: {e}")
@@ -879,6 +998,7 @@ def generate_quarterly(
         "portfolio_dates": data.get("dates", []),
         "scenarios": scenario_rows,
         "scenario_analysis": scenario_analysis,
+        "performance_block": perf_block,
         "narrative": narrative,
     }
 

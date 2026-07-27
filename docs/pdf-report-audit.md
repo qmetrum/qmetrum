@@ -133,3 +133,25 @@ Open residuals (small):
 Remaining nits: portfolio-value input still displayed for year-end though
 unused; portfolio-linked quarterly Query placeholder defaults; fragility 1.0
 padding in year-end risk chart; rebalancing chart 0.0 bar when VaR is None.
+
+
+## Tier 0 + Tier 1 DONE (2026-07-27)
+Tier 0 (bugs): S&P ampersand fixed at source (metric_card now escapes; reportlab
+Paragraph was parsing '&P' as an entity); regime/scenario enum labels humanized
+via new report_styles.humanize_label (High_Fragility -> "High fragility", bear_10
+-> "Bear: -10% equity shock") in quarterly/market-event/year-end; VaR redefined
+("loss not expected to be exceeded on 95% of days"); forecast band now a plain
+return range instead of "% of median" (narrator + fc_facts range_low/high_pct).
+Tier 1 (review spine, quarterly): _performance_block() adds multi-period return
+table + benchmark + relative, per-holding contribution attribution WITH a
+reconciling residual row and total, return-basis disclosure; narrator gained
+performance_commentary leading with return-vs-benchmark. All from engine data
+(get_benchmark_series_labeled, price_data), honest omission when absent. 78
+report tests pass; live-verified quarterly build.
+
+## Still open: Tier 2 (fees/net-of-fees, tax lots, target-allocation drift,
+cash-flow reconciliation - all need advisor/custodial INPUT) and Tier 3
+(component/marginal risk attribution, cross-section VaR<->scenario<->drawdown
+synthesis, forecast track-record vs naive baseline + interval calibration,
+pre-render consistency checks e.g. flag when historical drawdown exceeds worst
+scenario, tone guardrails). Panel verdict + full detail: task w5p35l5ri output.

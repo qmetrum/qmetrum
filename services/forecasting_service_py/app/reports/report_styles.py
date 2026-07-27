@@ -3,6 +3,8 @@ report_styles.py: Shared brand tokens, styles, and helpers for all PDF reports.
 Import this in every template so branding stays consistent.
 """
 
+from xml.sax.saxutils import escape
+
 from reportlab.lib.colors import HexColor
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle
@@ -79,12 +81,44 @@ s_callout_body = ParagraphStyle(
 
 # ─── REUSABLE COMPONENTS ───
 
+# Humanize internal enum/scenario keys for client-facing display.
+_LABEL_MAP = {
+    "high_fragility": "High fragility",
+    "elevated_fragility": "Elevated fragility",
+    "normal": "Normal",
+    "low_vol": "Low volatility",
+    "high_vol": "High volatility",
+    "base": "Base case",
+    "bull_10": "Bull: +10% equity shock",
+    "bear_10": "Bear: -10% equity shock",
+    "high_vol_regime": "High volatility regime",
+    "low_vol_regime": "Low volatility regime",
+    "worst_case_cvar": "Adversarial worst case",
+}
+
+
+def humanize_label(value) -> str:
+    """Turn an internal key like 'High_Fragility' or 'bear_10' into a phrase an
+    advisor would actually say. Unknown values get underscores spaced out and
+    title-cased."""
+    if value is None:
+        return ""
+    key = str(value).strip()
+    mapped = _LABEL_MAP.get(key.lower())
+    if mapped:
+        return mapped
+    return key.replace("_", " ").strip().capitalize() if key else ""
+
+
 def metric_card(value_str, label, color=NAVY):
-    """A small metric card (value on top, label below) for dashboard rows."""
+    """A small metric card (value on top, label below) for dashboard rows.
+
+    value_str/label are escaped: reportlab Paragraph treats text as mini-HTML,
+    so an unescaped '&' (e.g. 'S&P 500') would render as a broken entity."""
     data = [
-        [Paragraph(value_str, ParagraphStyle("_v", fontName="Helvetica-Bold",
+        [Paragraph(escape(str(value_str)), ParagraphStyle("_v", fontName="Helvetica-Bold",
                    fontSize=16, textColor=color, alignment=TA_CENTER, leading=20))],
-        [Paragraph(label, s_metric_lbl)],
+        [Paragraph(escape(str(label)), s_metric_lbl)],
     ]
     t = Table(data, colWidths=[120], rowHeights=[28, 16])
     t.setStyle(TableStyle([

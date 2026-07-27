@@ -132,7 +132,7 @@ def generate_market_event_report(output_path, data):
     else:
         cover_metrics.append(("PORTFOLIO VALUE", f"${d['portfolio_value']:,.0f}"))
     cover_metrics += [
-        ("REGIME", str(d["regime"])),
+        ("REGIME", humanize_label(d["regime"])),
         ("FRAGILITY", f"{d['fragility_score']:.2f}"),
     ]
 
@@ -166,7 +166,7 @@ def generate_market_event_report(output_path, data):
             metric_card(bench_ret_str, f"{bench_label} benchmark", SLATE),
             metric_card(f"{outperformance*100:+.1f}%", "Relative performance",
                         GREEN if outperformance > 0 else RED),
-            metric_card(str(d["regime"]), "Current regime",
+            metric_card(humanize_label(d["regime"]), "Current regime",
                         AMBER if d["regime"] != "Normal" else TEAL),
         ]))
     else:
@@ -174,7 +174,7 @@ def generate_market_event_report(output_path, data):
             metric_card(port_ret_str, "Your portfolio",
                         TEAL if d["portfolio_return_event"] >= 0 else CORAL),
             metric_card(f"{d['portfolio_drawdown_peak']*100:.1f}%", "Peak drawdown", CORAL),
-            metric_card(str(d["regime"]), "Current regime",
+            metric_card(humanize_label(d["regime"]), "Current regime",
                         AMBER if d["regime"] != "Normal" else TEAL),
             metric_card(f"{d['fragility_score']:.2f}", "Fragility score", SLATE),
         ]))
@@ -280,7 +280,7 @@ def generate_market_event_report(output_path, data):
     story.append(Paragraph("FORWARD OUTLOOK", s_section))
     story.append(Paragraph("What the models show from here", s_subheading))
     story.append(Paragraph(
-        f"The risk engine classifies the current regime as <b>{escape(str(d['regime']))}</b> "
+        f"The risk engine classifies the current regime as <b>{escape(humanize_label(d['regime']))}</b> "
         f"with a fragility score of <b>{d['fragility_score']:.2f}</b> (current volatility "
         f"relative to its long-term median; above 1.5 is flagged fragile).",
         s_body))
