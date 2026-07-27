@@ -4528,6 +4528,86 @@ QPULSE_REFERENCE_GATES = {
 }
 
 
+QPULSE_WATCHLIST_MAX = int(os.getenv("QPULSE_WATCHLIST_MAX", "200"))
+
+# Which Qsight asset_class values belong to which Alpaca feed.
+_QPULSE_CRYPTO_CLASSES = {"CRYPTO"}
+
+
+def _qpulse_is_crypto(symbol: str, asset_class: Optional[str]) -> bool:
+    """Crypto by registry, falling back to the symbol shape.
+
+    Asset.asset_class defaults to US_EQUITY, so a pair that was never
+    classified would otherwise be handed to the equities feed and rejected."""
+    if asset_class and asset_class.upper() in _QPULSE_CRYPTO_CLASSES:
+        return True
+    # yfinance/Qsight render crypto pairs as BASE-QUOTE; US equities never do.
+    return symbol.upper().endswith(("-USD", "-USDT", "-EUR", "-GBP"))
+
+
+def _qsight_to_qpulse_symbol(symbol: str, is_crypto: bool) -> str:
+    """Inverse of _qpulse_to_qsight_symbol: BTC-USD -> BTC/USD for the crypto feed."""
+    return symbol.replace("-", "/") if is_crypto else symbol
+
+
+@app.get("/qpulse/watchlist")
+def qpulse_watchlist(
+    feed: str = "crypto",
+    x_qpulse_key: Optional[str] = Header(default=None, alias="X-Qpulse-Key"),
+):
+    """The symbols Qpulse should currently subscribe to, for a given feed.
+
+    This is what lets the detector configure itself: a user creating an anomaly
+    rule in the UI is enough for it to be monitored, with no operator editing an
+    env var on a server. Only rules that opted in to external evaluation count —
+    the same set /qpulse/ingest is willing to write to — so the subscription can
+    never drift from what is actually actionable.
+    """
+    if not QPULSE_INGEST_KEY:
+        raise HTTPException(status_code=503, detail="Qpulse ingest is not configured")
+    supplied = (x_qpulse_key or "").encode("utf-8", "surrogatepass")
+    if not secrets.compare_digest(supplied, QPULSE_INGEST_KEY.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid Qpulse ingest key")
+
+    want_crypto = str(feed).strip().lower() == "crypto"
+
+    with Session(engine) as session:
+        rules = session.exec(
+            select(AlertRule)
+            .where(AlertRule.alert_type == "anomaly")
+            .where(AlertRule.is_active == True)  # noqa: E712
+        ).all()
+        # extra_config is JSON; filter in Python so this behaves identically on
+        # SQLite (dev) and Postgres (prod).
+        tickers = sorted({
+            r.ticker for r in rules
+            if str((r.extra_config or {}).get("detector", "")).lower() == "qpulse"
+            and r.ticker
+        })
+        if not tickers:
+            return {"feed": feed, "symbols": [], "count": 0, "truncated": False}
+
+        classes = {
+            a.symbol: a.asset_class
+            for a in session.exec(select(Asset).where(Asset.symbol.in_(tickers))).all()
+        }
+
+    selected = [
+        _qsight_to_qpulse_symbol(t, True) if want_crypto else t
+        for t in tickers
+        if _qpulse_is_crypto(t, classes.get(t)) == want_crypto
+    ]
+    truncated = len(selected) > QPULSE_WATCHLIST_MAX
+    if truncated:
+        # Alpaca caps subscriptions; report the cut rather than silently dropping.
+        logger.warning("Qpulse watchlist for feed=%s truncated: %d > %d",
+                       feed, len(selected), QPULSE_WATCHLIST_MAX)
+        selected = selected[:QPULSE_WATCHLIST_MAX]
+
+    return {"feed": feed, "symbols": selected, "count": len(selected),
+            "truncated": truncated}
+
+
 class QpulseAlertIn(BaseModel):
     symbol: str
     ts_ns: int
