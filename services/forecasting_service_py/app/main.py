@@ -42,6 +42,7 @@ from app.utils.data_fetcher import fetch_news
 from app.services.market_store import get_price_series_cached, get_fundamentals_cached
 from app.services.risk_client import calculate_risk, ping_risk_service
 from app.services.runtime_hardening import check_ml_runtime
+from app.services.email_notify import is_email_configured, send_email, build_alert_email
 from app.db.database import init_db, engine
 from app.db.models import (
     Portfolio,
@@ -2001,6 +2002,7 @@ def _evaluate_alerts_internal(
             alerts = [a for a in alerts if a.id in allowed]
 
         evaluations = []
+        pending_emails: List[tuple] = []  # (user_id, rule_name, result) for fresh triggers
         for alert in alerts:
             try:
                 result = _evaluate_alert_rule(alert)
@@ -2057,9 +2059,35 @@ def _evaluate_alerts_internal(
                             evaluated_at=now,
                         )
                     )
+                    # Notify the rule owner on a FRESH trigger only (cooldown
+                    # already gates this, so we never spam). Best-effort: email
+                    # failure must not affect evaluation/persistence.
+                    if triggered:
+                        pending_emails.append((alert.user_id, alert.name or f"Alert #{alert.id}", result))
 
         if persist:
             session.commit()
+
+        # Resolve recipient emails inside the session, before it closes.
+        email_jobs = []
+        if persist and pending_emails and is_email_configured():
+            uid_to_email = {}
+            for uid in {u for (u, _, _) in pending_emails}:
+                user = session.get(User, uid)
+                if user and user.email:
+                    uid_to_email[uid] = user.email
+            for uid, rule_name, result in pending_emails:
+                addr = uid_to_email.get(uid)
+                if addr:
+                    email_jobs.append((addr, rule_name, result))
+
+    # Send outside the DB session; each send is best-effort and self-contained.
+    for addr, rule_name, result in email_jobs if persist else []:
+        try:
+            subject, text, html = build_alert_email(rule_name=rule_name, result=result)
+            send_email(to_address=addr, subject=subject, body_text=text, body_html=html)
+        except Exception as e:
+            logger.warning("Alert email dispatch failed for %s: %s", addr, e)
 
     triggered = [item for item in evaluations if item.get("triggered")]
     return {
