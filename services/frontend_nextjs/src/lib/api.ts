@@ -483,6 +483,29 @@ export type AlertEventResponse = {
   evaluated_at: string;
 };
 
+/** Payload shape written by POST /qpulse/ingest. */
+export type QpulseEventPayload = {
+  detector_source: "qpulse";
+  /** Name of the labeled catalog this (kind, asset_class) was scored against,
+   *  or null when the combination has never been gated. Never render a recall
+   *  or false-positive figure next to a live alert: those were measured on
+   *  historical daily bars, not on the live stream producing this event. */
+  reference_gate: string | null;
+  gated_on_reference_catalog: boolean;
+  qpulse: {
+    kind: string;
+    score: number;
+    severity?: string | null;
+    narrative?: string | null;
+    details?: Record<string, unknown>;
+    ts_ns: number;
+    price: number;
+    symbol_raw: string;
+    feed?: string | null;
+    asset_class?: string | null;
+  };
+};
+
 export type AlertEvaluationSummary = {
   evaluated_count: number;
   triggered_count: number;
@@ -675,8 +698,12 @@ export const alertApi = {
   evaluate: async (params?: { active_only?: boolean; persist?: boolean }) =>
     (await api.post<AlertEvaluationSummary>("/alerts/evaluate", null, { params })).data,
 
-  events: async (params?: { limit?: number; triggered_only?: boolean }) =>
-    (await api.get<{ items: AlertEventResponse[] }>("/alerts/events", { params })).data,
+  events: async (params?: {
+    limit?: number;
+    triggered_only?: boolean;
+    ticker?: string;
+    detector_source?: string;
+  }) => (await api.get<{ items: AlertEventResponse[] }>("/alerts/events", { params })).data,
 
   remove: async (alertId: number) =>
     (await api.delete<{ deleted: boolean; alert_id: number }>(`/alerts/${alertId}`)).data,

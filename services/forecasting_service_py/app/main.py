@@ -2,13 +2,16 @@
 
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import logging
 import pandas as pd
 import os
 import json
 import hashlib
+import math
+import secrets
 import uuid
 from datetime import datetime, timedelta
 import copy
@@ -77,6 +80,28 @@ app = FastAPI(title="Qsight API")
 # No-op when COGNITO_USER_POOL_ID is not set (local dev). Mount before any
 # router so it runs on every request.
 app.add_middleware(CognitoAuthMiddleware)
+
+
+@app.middleware("http")
+async def _limit_request_body(request, call_next):
+    """Reject oversized bodies before anything parses them.
+
+    FastAPI validates a request body before the endpoint function runs, so an
+    unauthenticated caller can otherwise force the process to materialise an
+    arbitrarily large structure ahead of any auth check. The service runs as a
+    single 2 GB Fargate task, so that is an availability risk, not just waste.
+    """
+    declared = request.headers.get("content-length")
+    if declared is not None:
+        try:
+            if int(declared) > MAX_REQUEST_BODY_BYTES:
+                return JSONResponse(
+                    {"detail": f"Request body exceeds {MAX_REQUEST_BODY_BYTES} bytes"},
+                    status_code=413,
+                )
+        except ValueError:
+            return JSONResponse({"detail": "Invalid Content-Length"}, status_code=400)
+    return await call_next(request)
 app.include_router(report_router, prefix="/reports", tags=["Reports"])
 app.include_router(agents_router, prefix="/agents", tags=["Agents"])
 app.include_router(auth_router, prefix="/auth", tags=["Auth"])
@@ -102,6 +127,15 @@ ML_RUNTIME_STRICT = _env_flag("ML_RUNTIME_STRICT", False)
 ALERT_SCHEDULER_ENABLED = _env_flag("ALERT_SCHEDULER_ENABLED", True)
 ALERT_SCHEDULER_INTERVAL_SECONDS = int(os.getenv("ALERT_SCHEDULER_INTERVAL_SECONDS", "300"))
 ALERT_EVENT_COOLDOWN_SECONDS = int(os.getenv("ALERT_EVENT_COOLDOWN_SECONDS", "900"))
+# Shared secret for the Qpulse anomaly-detector webhook. Unset => /qpulse/ingest
+# refuses every request, so the endpoint ships inert until it is provisioned.
+QPULSE_INGEST_KEY = os.getenv("QPULSE_INGEST_KEY", "")
+QPULSE_INGEST_MAX_BATCH = int(os.getenv("QPULSE_INGEST_MAX_BATCH", "500"))
+# Hard ceiling on request bodies. FastAPI parses and validates a body before the
+# handler (and therefore before any auth check) runs, so without this an
+# unauthenticated POST can drive memory use far past the task's 2 GB limit and
+# OOM the service. Generous enough that no legitimate request approaches it.
+MAX_REQUEST_BODY_BYTES = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(8 * 1024 * 1024)))
 DEFAULT_USER_ID = int(os.getenv("DEFAULT_USER_ID", "1"))
 FORECAST_JOB_MAX_WORKERS = max(1, int(os.getenv("FORECAST_JOB_MAX_WORKERS", "2")))
 FORECAST_JOB_DISPATCH_MODE = os.getenv("FORECAST_JOB_DISPATCH_MODE", "threadpool").strip().lower()
@@ -1841,6 +1875,21 @@ def _evaluate_alert_rule(rule: AlertRule) -> dict:
     extra = rule.extra_config or {}
     alert_type = str(rule.alert_type or "price_threshold").lower()
 
+    # Externally-evaluated rules exit before any data fetch. This must precede
+    # the price lookup: leaving it after would burn a vendor call every 300s per
+    # rule, and — worse — the "no price data" return below would come back
+    # without the `skipped` marker, so the scheduler would persist a row for a
+    # rule it is supposed to leave alone.
+    if alert_type == "anomaly" and str(extra.get("detector", "")).lower() == "qpulse":
+        return {
+            "alert_id": rule.id,
+            "ticker": ticker,
+            "alert_type": alert_type,
+            "triggered": False,
+            "skipped": True,
+            "reason": "Externally evaluated by Qpulse (see /qpulse/ingest)",
+        }
+
     prices = get_price_series_cached(ticker, period="1y")
     if not prices:
         return {
@@ -1983,13 +2032,20 @@ def _evaluate_alerts_internal(
                     if last_triggered.evaluated_at >= suppress_before:
                         suppressed_by_cooldown = True
 
+            # Externally-evaluated rules produce no rows at all — persisting a
+            # "not triggered" event for them would both add noise and make the
+            # rule's latest event a placeholder rather than the real alert.
+            skipped_external = bool(result.get("skipped"))
+
             result["cooldown_seconds"] = cooldown_seconds
             result["suppressed_by_cooldown"] = suppressed_by_cooldown
             result["last_triggered_at"] = last_triggered_at.isoformat() if last_triggered_at else None
-            result["event_persisted"] = (not suppressed_by_cooldown) if persist else False
+            result["event_persisted"] = (
+                (not suppressed_by_cooldown) if (persist and not skipped_external) else False
+            )
             evaluations.append(result)
 
-            if persist:
+            if persist and not skipped_external:
                 if not suppressed_by_cooldown:
                     session.add(
                         AlertEvent(
@@ -4356,6 +4412,7 @@ def list_alert_events(
     alert_id: Optional[int] = None,
     ticker: Optional[str] = None,
     triggered_only: bool = False,
+    detector_source: Optional[str] = None,
     user_id: Optional[int] = None,
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
@@ -4375,10 +4432,211 @@ def list_alert_events(
             query = query.where(AlertEvent.ticker == _canonical_symbol(ticker))
         if triggered_only:
             query = query.where(AlertEvent.triggered == True)  # noqa: E712
-        rows = session.exec(
-            query.order_by(AlertEvent.evaluated_at.desc()).limit(max(1, min(limit, 1000)))
-        ).all()
-        return {"items": rows}
+        capped = max(1, min(limit, 1000))
+        query = query.order_by(AlertEvent.evaluated_at.desc(), AlertEvent.id.desc())
+        if not detector_source:
+            return {"items": session.exec(query.limit(capped)).all()}
+
+        # payload is JSON, so filter in Python rather than with a JSON operator
+        # that differs between SQLite (dev) and Postgres (prod). Page through
+        # until enough matches are found: a fixed scan window would return an
+        # EMPTY feed once older matches fall outside it, which is indistinguishable
+        # from "no alerts" and is exactly how a real alert goes unnoticed.
+        wanted = detector_source.strip().lower()
+        matches: List[AlertEvent] = []
+        page, offset = 500, 0
+        while len(matches) < capped and offset < 20000:
+            batch = session.exec(query.offset(offset).limit(page)).all()
+            if not batch:
+                break
+            matches.extend(
+                r for r in batch
+                if str((r.payload or {}).get("detector_source", "")).lower() == wanted
+            )
+            offset += page
+        return {"items": matches[:capped]}
+
+
+# -------------------------------------------------------------------
+# Qpulse ingest — external anomaly detector webhook
+# -------------------------------------------------------------------
+
+# Which (alert kind, SYMBOL) pairs have been scored against a labeled reference
+# catalog, and the name of the gate that scored them. Membership here licenses
+# the UI to name a gate — never to display a recall or FP figure beside a live
+# alert. Those figures were measured on historical DAILY BARS; a live tick
+# stream is a different regime and its performance is unmeasured.
+#
+# Keyed on the exact symbol, not on an asset class. The crypto gate was measured
+# on BTC alone, so an ETH-USD or SOL-USD alert must not inherit it — that would
+# claim a gate for a context that was never gated. The macro entry keys on the
+# universe string the batch detector emits as its symbol, so changing
+# HFT_BATCH_UNIVERSE correctly drops the claim.
+#
+# spread_widen is deliberately absent: the frozen v1 artifact contains zero
+# spread_widen alerts, so nothing about that kind was actually gated.
+QPULSE_REFERENCE_GATES = {
+    ("robust_z", "BTC-USD"): "BTC daily-bar crisis catalog (v1)",
+    ("cusum", "BTC-USD"): "BTC daily-bar crisis catalog (v1)",
+    ("dependence_shift", "XLK,XLF,XLE,XLV,SPY,TLT,GLD,HYG"):
+        "8-asset macro daily basket (v1)",
+}
+
+
+class QpulseAlertIn(BaseModel):
+    symbol: str
+    ts_ns: int
+    kind: str
+    price: float = 0.0
+    score: float = 0.0
+    details: Optional[Dict[str, Any]] = None
+    severity: Optional[str] = None
+    narrative: Optional[str] = None
+
+
+class QpulseIngestRequest(BaseModel):
+    source: str = "qpulse"
+    feed: Optional[str] = None
+    asset_class: Optional[str] = None
+    # Capped in the model so validation rejects an oversized batch instead of
+    # the handler building every element first.
+    alerts: List[QpulseAlertIn] = Field(default_factory=list, max_length=500)
+
+
+def _qpulse_to_qsight_symbol(symbol: str) -> str:
+    """Qpulse emits crypto pairs as BTC/USD; Qsight/yfinance use BTC-USD."""
+    return _canonical_symbol(str(symbol).replace("/", "-"))
+
+
+def _finite(value: float) -> float:
+    """Reject NaN/Infinity: json.loads accepts them, but they are not valid JSON
+    and would either 500 every later read of the row (SQLite) or abort the whole
+    batch at flush time (Postgres)."""
+    v = float(value)
+    if not math.isfinite(v):
+        raise HTTPException(status_code=422, detail="score/price must be finite")
+    return v
+
+
+@app.post("/qpulse/ingest")
+def qpulse_ingest(
+    payload: QpulseIngestRequest,
+    x_qpulse_key: Optional[str] = Header(default=None, alias="X-Qpulse-Key"),
+):
+    """Accept alerts from a Qpulse detector and fan them out to matching rules.
+
+    Authenticated by shared secret, not by user identity: the caller is a
+    service, and it is never allowed to name the user whose rules it triggers.
+    Ownership is derived solely from AlertRule.user_id here.
+    """
+    if not QPULSE_INGEST_KEY:
+        raise HTTPException(status_code=503, detail="Qpulse ingest is not configured")
+    # compare_digest raises TypeError on a non-ASCII str, which would surface as
+    # an unauthenticated 500, so compare bytes.
+    supplied = (x_qpulse_key or "").encode("utf-8", "surrogatepass")
+    if not secrets.compare_digest(supplied, QPULSE_INGEST_KEY.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Invalid Qpulse ingest key")
+    if len(payload.alerts) > QPULSE_INGEST_MAX_BATCH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"batch too large: {len(payload.alerts)} > {QPULSE_INGEST_MAX_BATCH}",
+        )
+
+    asset_class = (payload.asset_class or "unknown").strip().lower()
+    now = datetime.utcnow()
+    matched_rules = 0
+    persisted = 0
+    suppressed: List[Dict[str, Any]] = []
+    unmatched: List[str] = []
+    # Events written during THIS request are not yet visible to the cooldown
+    # query in a comparable way (autoflush makes them visible with an identical
+    # `now`, which would suppress every later alert in the batch). Track them
+    # here instead so intra-batch suppression is an explicit decision.
+    written_at: Dict[int, datetime] = {}
+
+    with Session(engine) as session:
+        for alert in payload.alerts:
+            ticker = _qpulse_to_qsight_symbol(alert.symbol)
+            score = _finite(alert.score)
+            price = _finite(alert.price)
+            rules = [
+                r for r in session.exec(
+                    select(AlertRule)
+                    .where(AlertRule.ticker == ticker)
+                    .where(AlertRule.alert_type == "anomaly")
+                    .where(AlertRule.is_active == True)  # noqa: E712
+                ).all()
+                # Only rules that opted in to external evaluation. A plain
+                # anomaly rule is still owned by the built-in z-score; writing
+                # to it here would give one rule two writers sharing a cooldown,
+                # each silently suppressing the other.
+                if str((r.extra_config or {}).get("detector", "")).lower() == "qpulse"
+            ]
+            if not rules:
+                if ticker not in unmatched:
+                    unmatched.append(ticker)
+                continue
+
+            gate = QPULSE_REFERENCE_GATES.get((alert.kind, ticker))
+            event_payload = {
+                "detector_source": "qpulse",
+                "reference_gate": gate,
+                "gated_on_reference_catalog": gate is not None,
+                "qpulse": {
+                    "kind": alert.kind,
+                    "score": score,
+                    "severity": alert.severity,
+                    "narrative": alert.narrative,
+                    "details": alert.details or {},
+                    "ts_ns": alert.ts_ns,
+                    "price": price,
+                    "symbol_raw": alert.symbol,
+                    "feed": payload.feed,
+                    "asset_class": asset_class,
+                },
+            }
+
+            for rule in rules:
+                matched_rules += 1
+                cooldown = int((rule.extra_config or {}).get(
+                    "cooldown_seconds", ALERT_EVENT_COOLDOWN_SECONDS))
+                if cooldown > 0:
+                    cutoff = now - timedelta(seconds=cooldown)
+                    prior = written_at.get(rule.id)
+                    if prior is None:
+                        last = session.exec(
+                            select(AlertEvent)
+                            .where(AlertEvent.alert_id == rule.id)
+                            .where(AlertEvent.triggered == True)  # noqa: E712
+                            .order_by(AlertEvent.evaluated_at.desc())
+                            .limit(1)
+                        ).first()
+                        prior = last.evaluated_at if last else None
+                    if prior and prior >= cutoff:
+                        suppressed.append({"symbol": ticker, "kind": alert.kind,
+                                           "alert_id": rule.id})
+                        continue
+
+                session.add(AlertEvent(
+                    alert_id=rule.id,
+                    ticker=ticker,
+                    alert_type="anomaly",
+                    triggered=True,
+                    payload=event_payload,
+                    evaluated_at=now,
+                ))
+                written_at[rule.id] = now
+                persisted += 1
+
+        session.commit()
+
+    return {
+        "received": len(payload.alerts),
+        "matched_rules": matched_rules,
+        "events_persisted": persisted,
+        "suppressed": suppressed,
+        "unmatched_symbols": unmatched,
+    }
 
 
 # -------------------------------------------------------------------

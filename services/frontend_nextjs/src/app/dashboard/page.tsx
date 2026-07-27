@@ -6,6 +6,7 @@ import { portfolioListApi, healthApi, type PortfolioResponse } from "@/lib/api";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { RegimeBadge } from "@/components/shared/RegimeBadge";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
+import { AnomalyFeedCard } from "@/components/shared/AnomalyFeedCard";
 
 export default function DashboardPage() {
   const { data: portfolios, isLoading: pLoading } = useQuery({
@@ -153,7 +154,8 @@ export default function DashboardPage() {
         </div>
 
         {/* Alerts */}
-        <div className="lg:col-span-1">
+        <div className="lg:col-span-1 space-y-6">
+          <AnomalyFeedCard title="Anomaly Feed" />
           <AlertRulesList title="Alerts" />
         </div>
       </div>

@@ -352,7 +352,8 @@ cat > /tmp/qsight-taskdef.json <<JSON
         { "name": "COGNITO_USER_POOL_ID", "valueFrom": "${SSM_BASE}/COGNITO_USER_POOL_ID" },
         { "name": "COGNITO_APP_CLIENT_ID","valueFrom": "${SSM_BASE}/COGNITO_APP_CLIENT_ID" },
         { "name": "CORS_ALLOW_ALL",       "valueFrom": "${SSM_BASE}/CORS_ALLOW_ALL" },
-        { "name": "CORS_ALLOW_ORIGINS",   "valueFrom": "${SSM_BASE}/CORS_ALLOW_ORIGINS" }
+        { "name": "CORS_ALLOW_ORIGINS",   "valueFrom": "${SSM_BASE}/CORS_ALLOW_ORIGINS" },
+        { "name": "QPULSE_INGEST_KEY",    "valueFrom": "${SSM_BASE}/QPULSE_INGEST_KEY" }
       ],
       "logConfiguration": {
         "logDriver": "awslogs",

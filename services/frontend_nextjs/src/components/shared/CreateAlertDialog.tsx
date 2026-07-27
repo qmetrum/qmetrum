@@ -28,6 +28,7 @@ export function CreateAlertDialog({
     currentPrice != null ? String(Number(currentPrice).toFixed(2)) : "",
   );
   const [name, setName] = useState("");
+  const [alertType, setAlertType] = useState<"price_threshold" | "anomaly">("price_threshold");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -36,14 +37,31 @@ export function CreateAlertDialog({
       setDirection("above");
       setThreshold(currentPrice != null ? String(Number(currentPrice).toFixed(2)) : "");
       setName("");
+      setAlertType("price_threshold");
       setError(null);
     }
   }, [open, initialTicker, currentPrice]);
 
+  const isAnomaly = alertType === "anomaly";
+
   const createMutation = useMutation({
     mutationFn: async () => {
-      const thresholdNum = parseFloat(threshold);
       const t = ticker.trim().toUpperCase();
+
+      if (isAnomaly) {
+        // detector: "qpulse" hands ownership of this rule to POST /qpulse/ingest.
+        // Without it the built-in z-score evaluates the same rule every 300s,
+        // consuming the shared cooldown and suppressing real Qpulse alerts.
+        return alertApi.create({
+          name: name.trim() || `${t} anomaly (Qpulse)`,
+          ticker: t,
+          alert_type: "anomaly",
+          is_active: true,
+          extra_config: { detector: "qpulse" },
+        });
+      }
+
+      const thresholdNum = parseFloat(threshold);
       const autoName = `${t} ${direction} ${thresholdNum}`;
       const rule = await alertApi.create({
         name: name.trim() || autoName,
@@ -71,14 +89,16 @@ export function CreateAlertDialog({
 
   const handleSubmit = () => {
     setError(null);
-    const thresholdNum = parseFloat(threshold);
     if (!ticker.trim()) {
       setError("Ticker is required");
       return;
     }
-    if (!isFinite(thresholdNum) || thresholdNum <= 0) {
-      setError("Threshold must be a positive number");
-      return;
+    if (!isAnomaly) {
+      const thresholdNum = parseFloat(threshold);
+      if (!isFinite(thresholdNum) || thresholdNum <= 0) {
+        setError("Threshold must be a positive number");
+        return;
+      }
     }
     createMutation.mutate();
   };
@@ -117,7 +137,27 @@ export function CreateAlertDialog({
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+            Alert Type
+          </label>
+          <select
+            value={alertType}
+            onChange={(e) => setAlertType(e.target.value as "price_threshold" | "anomaly")}
+            className="w-full rounded border border-[var(--card-border)] bg-[var(--content-bg)] px-3 py-2 text-sm text-[var(--text-primary)]"
+          >
+            <option value="price_threshold">Price threshold</option>
+            <option value="anomaly">Anomaly (Qpulse)</option>
+          </select>
+          {isAnomaly && (
+            <p className="mt-1 text-[11px] text-[var(--text-muted)]">
+              Alerts arrive from the Qpulse detector, which runs on demand rather than
+              continuously. Nothing appears here until you start it.
+            </p>
+          )}
+        </div>
+
+        <div className={`grid grid-cols-2 gap-3 ${isAnomaly ? "hidden" : ""}`}>
           <div>
             <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
               Direction
