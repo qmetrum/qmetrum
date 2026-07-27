@@ -42,7 +42,9 @@ from app.utils.data_fetcher import fetch_news
 from app.services.market_store import get_price_series_cached, get_fundamentals_cached
 from app.services.risk_client import calculate_risk, ping_risk_service
 from app.services.runtime_hardening import check_ml_runtime
-from app.services.email_notify import is_email_configured, send_email, build_alert_email
+from app.services.email_notify import (
+    is_email_configured, send_email, build_alert_email, build_qpulse_alert_email,
+)
 from app.db.database import init_db, engine
 from app.db.models import (
     Portfolio,
@@ -182,6 +184,21 @@ async def _log_http_exception(request: Request, exc: HTTPException):
             exc.status_code, request.method, request.url.path, exc.detail,
         )
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+
+
+@app.exception_handler(Exception)
+async def _log_unhandled_exception(request: Request, exc: Exception):
+    # Unexpected errors otherwise surface as a bare 500 with no logged stack,
+    # which is invisible in CloudWatch. Log the full traceback with request
+    # context (for alarms/aggregation) but return a generic message so we never
+    # leak internals to the client.
+    logger.exception(
+        "Unhandled error on %s %s: %s", request.method, request.url.path, exc,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error."},
+    )
 
 
 # --- LIFECYCLE EVENTS ---
@@ -4576,6 +4593,7 @@ def qpulse_ingest(
     persisted = 0
     suppressed: List[Dict[str, Any]] = []
     unmatched: List[str] = []
+    email_jobs: List[tuple] = []
     # Events written during THIS request are not yet visible to the cooldown
     # query in a comparable way (autoflush makes them visible with an identical
     # `now`, which would suppress every later alert in the batch). Track them
@@ -4655,8 +4673,33 @@ def qpulse_ingest(
                 ))
                 written_at[rule.id] = now
                 persisted += 1
+                email_jobs.append((rule.user_id, rule.name, ticker, event_payload))
 
         session.commit()
+
+        # Resolve recipients inside the session, before it closes. Only events
+        # that actually persisted get an email, so the per-rule cooldown already
+        # throttles delivery.
+        if email_jobs and is_email_configured():
+            uid_to_email = {}
+            for uid in {j[0] for j in email_jobs}:
+                user = session.get(User, uid)
+                if user and user.email and user.is_active:
+                    uid_to_email[uid] = user.email
+            email_jobs = [(uid_to_email[u], n, t, p) for (u, n, t, p) in email_jobs
+                          if u in uid_to_email]
+        else:
+            email_jobs = []
+
+    # Send outside the DB session. Best-effort: a delivery failure must never
+    # fail the ingest, because the alert is already durably stored.
+    for addr, rule_name, tkr, pl in email_jobs:
+        try:
+            subject, text, html = build_qpulse_alert_email(
+                rule_name=rule_name, ticker=tkr, payload=pl)
+            send_email(to_address=addr, subject=subject, body_text=text, body_html=html)
+        except Exception as e:
+            logger.warning("Qpulse alert email dispatch failed for %s: %s", addr, e)
 
     return {
         "received": len(payload.alerts),

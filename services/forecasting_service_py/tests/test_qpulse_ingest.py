@@ -296,6 +296,64 @@ def test_naive_scheduler_skips_qpulse_rules(rule):
         assert events == [], "naive scheduler persisted a row for a Qpulse rule"
 
 
+def test_email_sent_for_persisted_alert_only(client, rule, monkeypatch):
+    """Email follows persistence, so the cooldown throttles delivery too."""
+    sent = []
+    monkeypatch.setattr(m, "is_email_configured", lambda: True)
+    monkeypatch.setattr(m, "send_email",
+                        lambda **kw: sent.append(kw) or True)
+
+    h = {"X-Qpulse-Key": KEY}
+    assert client.post("/qpulse/ingest", json=_batch(), headers=h).json()["events_persisted"] == 1
+    assert len(sent) == 1, "no email for a persisted alert"
+    assert "BTC-USD" in sent[0]["subject"]
+    body = sent[0]["body_text"]
+    assert "robust_z" in body
+    assert "not investment advice" in body
+
+    # Suppressed by cooldown -> no second email.
+    client.post("/qpulse/ingest", json=_batch(), headers=h)
+    assert len(sent) == 1, "email sent for a cooldown-suppressed alert"
+
+
+def test_email_states_gating_and_feed_provenance(client, rule, monkeypatch):
+    """A synthetic-feed or ungated alert must say so in the email body."""
+    sent = []
+    monkeypatch.setattr(m, "is_email_configured", lambda: True)
+    monkeypatch.setattr(m, "send_email", lambda **kw: sent.append(kw) or True)
+
+    body = _batch(kind="spread_widen")          # never gated
+    body["feed"] = "synthetic"                  # not live data
+    client.post("/qpulse/ingest", json=body, headers={"X-Qpulse-Key": KEY})
+
+    assert sent, "no email sent"
+    text = sent[0]["body_text"]
+    assert "experimental" in text.lower()
+    assert "simulated" in text.lower() or "not live market data" in text.lower()
+    assert "%" not in text.split("not investment advice")[0].replace("100%", ""), \
+        "email should not quote a recall/accuracy percentage"
+
+
+def test_email_failure_does_not_break_ingest(client, rule, monkeypatch):
+    monkeypatch.setattr(m, "is_email_configured", lambda: True)
+
+    def boom(**kw):
+        raise RuntimeError("SES down")
+
+    monkeypatch.setattr(m, "send_email", boom)
+    r = client.post("/qpulse/ingest", json=_batch(), headers={"X-Qpulse-Key": KEY})
+    assert r.status_code == 200
+    assert r.json()["events_persisted"] == 1
+
+
+def test_no_email_when_unconfigured(client, rule, monkeypatch):
+    sent = []
+    monkeypatch.setattr(m, "is_email_configured", lambda: False)
+    monkeypatch.setattr(m, "send_email", lambda **kw: sent.append(kw) or True)
+    client.post("/qpulse/ingest", json=_batch(), headers={"X-Qpulse-Key": KEY})
+    assert sent == []
+
+
 def test_cooldown_does_not_leak_across_rules(client):
     """Two rules on the same ticker each get their own event."""
     with Session(engine) as s:

@@ -7,6 +7,10 @@ run_locally.txt
 # --- Local databases ---
 qmetrum.db
 qmetrum.db-journal
+# Local dev/test SQLite (prod is Postgres). Named rules above missed files like
+# local.db and eval_local.db, which tests and scripts create on the fly.
+*.db
+*.db-journal
 *.db-shm
 *.db-wal
 

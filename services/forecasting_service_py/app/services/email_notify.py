@@ -79,6 +79,79 @@ def _fmt_num(v) -> str:
     return f"{f:,.2f}"
 
 
+def build_qpulse_alert_email(*, rule_name: str, ticker: str,
+                             payload: dict) -> tuple[str, str, str]:
+    """Compose (subject, text, html) for an alert from the Qpulse detector.
+
+    Reports only what the detector actually sent. The gating status and the feed
+    are always stated: a score is a deviation, not a track record, and an alert
+    off a synthetic or replayed feed must never read like a live-market event.
+    """
+    q = (payload or {}).get("qpulse") or {}
+    kind = str(q.get("kind", "anomaly"))
+    severity = str(q.get("severity") or "").upper()
+    feed = str(q.get("feed") or "").lower()
+
+    subject = f"Qsight anomaly: {ticker} {kind}"
+    if severity:
+        subject = f"[{severity}] {subject}"
+
+    facts = [f"Alert: {rule_name}", f"Ticker: {ticker}", f"Detector: {kind}"]
+    if q.get("score") is not None:
+        facts.append(f"Score: {_fmt_num(q.get('score'))} sd from baseline")
+    if severity:
+        facts.append(f"Severity: {severity}")
+    if q.get("price") is not None:
+        facts.append(f"Price at detection: {_fmt_num(q.get('price'))}")
+    if q.get("narrative"):
+        facts.append(f"Detail: {q['narrative']}")
+
+    caveats = []
+    if feed in {"synthetic", "csv"}:
+        caveats.append(
+            "This alert came from a "
+            + ("simulated" if feed == "synthetic" else "replayed historical")
+            + " feed, not live market data."
+        )
+    if (payload or {}).get("gated_on_reference_catalog") and payload.get("reference_gate"):
+        caveats.append(
+            f"This detector was scored offline against {payload['reference_gate']} "
+            f"(historical daily bars). Its accuracy on live data has not been measured."
+        )
+    else:
+        caveats.append(
+            "This detector has not been scored against a labeled catalog for this "
+            "asset. Treat it as experimental."
+        )
+
+    app_url = os.getenv("APP_BASE_URL", "").rstrip("/")
+    link = f"\n\nView in Qsight: {app_url}/dashboard" if app_url else ""
+    disclaimer = (
+        "\n\nThis is an automated alert generated from streaming market data. "
+        "It is informational only and not investment advice."
+    )
+    text = "\n".join(facts) + "\n\n" + "\n".join(caveats) + link + disclaimer
+
+    rows = "".join(f"<tr><td style='padding:2px 10px 2px 0;color:#5A6270'>{k}</td>"
+                   f"<td style='padding:2px 0;font-weight:600'>{v}</td></tr>"
+                   for k, v in (f.split(": ", 1) for f in facts if ": " in f))
+    caveat_html = "".join(
+        f"<p style='font-size:12px;color:#8B6D3F;background:#FDF6E3;"
+        f"padding:8px 10px;border-radius:4px;margin:8px 0'>{c}</p>" for c in caveats)
+    link_html = (f"<p><a href='{app_url}/dashboard'>View in Qsight</a></p>"
+                 if app_url else "")
+    html = (
+        f"<div style='font-family:Helvetica,Arial,sans-serif;font-size:14px;color:#1A1A2E'>"
+        f"<h2 style='color:#0B1D3A;margin:0 0 8px'>Anomaly detected</h2>"
+        f"<table style='border-collapse:collapse'>{rows}</table>"
+        f"{caveat_html}{link_html}"
+        f"<p style='font-size:11px;color:#8B95A2;margin-top:16px'>"
+        f"This is an automated alert generated from streaming market data. It is "
+        f"informational only and not investment advice.</p></div>"
+    )
+    return subject, text, html
+
+
 def build_alert_email(*, rule_name: str, result: dict) -> tuple[str, str, str]:
     """Compose (subject, text, html) from a triggered alert's evaluation result.
     Uses only the real evaluation fields; no invented content."""

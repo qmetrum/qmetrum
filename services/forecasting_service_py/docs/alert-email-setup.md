@@ -34,8 +34,14 @@ temporary root key or the console):
 - The alert scheduler emails the rule's owner (`User.email`) on a FRESH trigger
   only; the existing per-rule cooldown (default 900s) is what prevents repeats,
   so no extra throttle is needed.
-- Delivery is best-effort: a send failure logs a warning and never affects
-  alert evaluation or the persisted AlertEvent.
+- **`POST /qpulse/ingest` does the same for Qpulse detector alerts**, using
+  `build_qpulse_alert_email`. Only alerts that actually persist are emailed, so
+  the same per-rule cooldown throttles delivery. These emails always state the
+  detector's gating status and the feed provenance — an ungated kind reads
+  "experimental", and a synthetic or replayed feed is called out explicitly, so
+  a simulated alert can never look like a live-market event.
+- Delivery is best-effort in both paths: a send failure logs a warning and never
+  affects alert evaluation, the persisted AlertEvent, or the ingest response.
 
 ## Known limitation (interacts with scale-to-zero)
 The scheduler is an in-process daemon thread, so evaluation (and therefore

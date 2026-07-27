@@ -222,7 +222,7 @@ def compute_monthly_fragility(
     tickers: List[str],
     weights: Dict[str, float],
     year: int,
-) -> List[float]:
+) -> List[Optional[float]]:
     """
     Compute monthly portfolio-weighted fragility from AssetVolatilitySnapshot.
     Returns list of 12 floats.
@@ -259,7 +259,10 @@ def compute_monthly_fragility(
         if total_weight > 0:
             monthly_fragility.append(weighted_fragility / total_weight)
         else:
-            monthly_fragility.append(1.0)  # neutral default
+            # No snapshot for this month: a gap, not a fabricated "neutral 1.0"
+            # drawn as a real observation. The year-end chart renders None as a
+            # break in the line (see make_risk_evolution / _nan_array).
+            monthly_fragility.append(None)
 
     return monthly_fragility
 
