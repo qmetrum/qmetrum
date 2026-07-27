@@ -155,3 +155,29 @@ cash-flow reconciliation - all need advisor/custodial INPUT) and Tier 3
 synthesis, forecast track-record vs naive baseline + interval calibration,
 pre-render consistency checks e.g. flag when historical drawdown exceeds worst
 scenario, tone guardrails). Panel verdict + full detail: task w5p35l5ri output.
+
+
+## Tier 3 DONE (2026-07-27) - analytical depth (quarterly)
+- Component RISK attribution: _risk_attribution_block() decomposes portfolio
+  volatility into per-holding risk share from the real return covariance
+  (contributions sum to portfolio vol); rendered as "Risk contribution by
+  holding" + narrated ("which holding drives risk" is now computed, not
+  asserted). None without >=2 assets / >=60 obs.
+- Cross-section synthesis: _risk_reconciliation() puts 1-day VaR, worst
+  scenario, realized max drawdown, and forecast downside on ONE dollar basis;
+  narrator "risk_synthesis" ties them together and names the most severe.
+- Consistency flags: deterministic check flags when the worst simulated
+  scenario is milder than the realized max drawdown (stress understates tail);
+  surfaced in the PDF and to the narrator.
+- Forecast track record: _forecast_track_record() shows directional accuracy
+  with a 95% CI and the 50% coin-flip baseline (from real walk-forward
+  validation via _real_model_accuracy); states plainly when the edge is not
+  statistically distinguishable from chance.
+- Tone guardrails in the narrator: fragility below 1.5 must not read as
+  "fragile"; an accuracy CI spanning 50% is not a reliable edge; fragility
+  bucketed by _fragility_label against the framework's own threshold.
+80 report tests pass; live-verified quarterly build (incl. flag firing).
+
+## Still open (optional): Tier 2 (advisor/custodial INPUTS: fees/net-of-fees,
+tax lots, target-allocation drift, cash-flow reconciliation) and applying the
+Tier 1/Tier 3 depth to the OTHER four reports (currently quarterly-only).

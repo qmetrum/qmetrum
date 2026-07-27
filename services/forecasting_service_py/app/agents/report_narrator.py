@@ -25,7 +25,8 @@ SYSTEM_PROMPT = """You are a buy-side risk analyst writing the narrative layer o
 - executive_summary: 3-5 sentences. Lead with how the portfolio actually performed over the headline period and versus its benchmark if supplied (the number the client cares about first), then its risk posture (volatility, drawdown, regime), then the single most important takeaway.
 - performance_commentary: 2-4 sentences (only if performance facts are supplied, else empty string). How the portfolio did across the periods shown, how that compares to the benchmark (outperformed or lagged, by how much), and which holdings drove the result per the attribution, including an honest note if a large residual means much of the return is unexplained by the listed positions.
 - forecast_commentary: 2-4 sentences. What the median forecast path implies in return terms and, if an interval range is supplied, the plain dollar range it spans, plus what the current regime means for reliability.
-- risk_commentary: 3-5 sentences. Interpret the risk table: what VaR/CVaR mean in dollar terms for THIS portfolio value, whether the Sharpe/Sortino pairing suggests the return is worth the risk, what the drawdown and fragility numbers say, and why.
+- risk_commentary: 3-5 sentences. Interpret the risk table: what VaR/CVaR mean in dollar terms for THIS portfolio value, whether the Sharpe/Sortino pairing suggests the return is worth the risk, what the drawdown and fragility numbers say, and why. If a risk-contribution decomposition is supplied, name which holding contributes the MOST to portfolio volatility and note where its risk share diverges from its weight (a small position can carry outsized risk); do not merely assert dominance, cite the contribution number.
+- risk_synthesis: 2-4 sentences (only if a risk reconciliation is supplied, else empty string). Tie the separate downside measures into ONE picture on a common dollar basis: the 1-day VaR, the worst simulated scenario, the realized maximum drawdown, and the forecast downside. State them in dollars for this portfolio, say which is the most severe, and if a consistency flag is supplied, surface it plainly (for example that the stress set looks milder than the drawdown already experienced).
 - scenario_commentary: 2-4 sentences interpreting the scenario set as a whole (only if scenario facts are supplied): where the real downside comes from, and what the adversarial case reveals. Empty string if no scenarios supplied.
 - holdings_commentary: 2-3 sentences. Concentration, diversification, and what dominates the risk given the weights.
 - considerations: 2-5 short bullets. Possible moves the advisor could evaluate, each tied to a specific number in the facts (for example trimming a concentrated position, hedging a fat tail the scenarios expose, or revisiting exposure given fragility). Phrase each as an option to evaluate, never an instruction.
@@ -36,8 +37,9 @@ Rules:
 - Plain professional English. Expand jargon on first use.
 - These are model-derived observations for a professional to evaluate, not advice. No promises, no certainty language.
 - NEVER use em dashes or en dashes anywhere in the text. Use commas, colons, or periods instead.
+- Do not overstate. Match the framework's own thresholds: a fragility below 1.5 is NOT "fragile" or "disproportionate sensitivity"; reflect the supplied fragility description. A directional accuracy whose confidence interval includes 50% is NOT a reliable edge; say so honestly.
 
-Return JSON with exactly those fields (performance_commentary included).
+Return JSON with exactly those fields (performance_commentary and risk_synthesis included).
 """
 
 
@@ -46,6 +48,7 @@ class ReportNarrative(BaseModel):
     performance_commentary: str = ""
     forecast_commentary: str
     risk_commentary: str
+    risk_synthesis: str = ""
     scenario_commentary: str
     holdings_commentary: str
     considerations: list[str]
@@ -89,6 +92,32 @@ def build_prompt(facts: dict[str, Any]) -> str:
         f"  beta {rm.get('beta', 0):.2f}, fragility {rm.get('fragility_score', 0):.2f}, "
         f"regime {str(rm.get('regime', 'Normal')).replace('_', ' ')}",
     ]
+    ra = facts.get("risk_attribution") or {}
+    if ra.get("rows"):
+        lines += ["", f"Risk contribution (portfolio volatility {ra['portfolio_vol'] * 100:.1f}%, "
+                      f"{ra.get('n_obs', 0)} obs; risk share vs weight):"]
+        for r in ra["rows"][:8]:
+            lines.append(f"  {r['ticker']}: weight {r['weight'] * 100:.0f}%, risk share {r['risk_pct'] * 100:.0f}%")
+    rr = facts.get("risk_reconciliation") or {}
+    if rr.get("var_1d_dollars") is not None or rr.get("worst_scenario_dollars") is not None:
+        lines += ["", "Downside on one basis (dollars for this portfolio):"]
+        if rr.get("var_1d_dollars") is not None:
+            lines.append(f"  1-day VaR95: {_fmt_money(rr['var_1d_dollars'])} ({_pct(rr.get('var_1d_pct'))})")
+        if rr.get("worst_scenario_dollars") is not None:
+            lines.append(f"  worst scenario ({(rr.get('worst_scenario') or {}).get('name')}): {_fmt_money(rr['worst_scenario_dollars'])}")
+        if rr.get("max_drawdown_dollars") is not None:
+            lines.append(f"  realized max drawdown: {_fmt_money(rr['max_drawdown_dollars'])} ({_pct(rr.get('max_drawdown_pct'))})")
+        if rr.get("forecast_downside_dollars") is not None:
+            lines.append(f"  forecast downside (low end): {_fmt_money(rr['forecast_downside_dollars'])}")
+        lines.append(f"  fragility reading: {rr.get('fragility_label', 'n/a')}")
+        for fl in rr.get("flags", []):
+            lines.append(f"  CONSISTENCY FLAG: {fl}")
+    tr = facts.get("track_record") or {}
+    if tr.get("hit_rate") is not None:
+        lines += ["", "Forecast track record (walk-forward validation):",
+                  f"  directional accuracy {tr['hit_rate'] * 100:.0f}% over {tr['n_steps']} steps, "
+                  f"95% CI {tr['ci_low'] * 100:.0f}% to {tr['ci_high'] * 100:.0f}%, coin-flip baseline 50%, "
+                  f"{'statistically above' if tr.get('beats_coinflip') else 'NOT distinguishable from'} chance"]
     perf = facts.get("performance") or {}
     if perf.get("periods"):
         lines += ["", f"Realized performance (benchmark: {perf.get('benchmark_label') or 'none available'}):"]
@@ -163,7 +192,7 @@ def run(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
     out = {
         k: _strip_dashes(str(parsed.get(k) or ""))
         for k in ("executive_summary", "performance_commentary", "forecast_commentary",
-                  "risk_commentary", "scenario_commentary", "holdings_commentary")
+                  "risk_commentary", "risk_synthesis", "scenario_commentary", "holdings_commentary")
     }
     out["considerations"] = [
         _strip_dashes(str(c)) for c in (parsed.get("considerations") or []) if str(c).strip()

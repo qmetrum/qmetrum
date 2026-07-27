@@ -374,6 +374,24 @@ def generate_quarterly_report(output_path, data):
     if narrative.get("forecast_commentary"):
         story.append(Paragraph(escape(narrative["forecast_commentary"]), s_body_sm))
 
+    # Forecast track record: directional accuracy with a confidence interval
+    # and the coin-flip baseline, so the forecast is not read as more (or less)
+    # reliable than validation supports.
+    tr = d.get("track_record") or {}
+    if tr.get("hit_rate") is not None:
+        verdict = ("statistically above the 50% coin-flip baseline"
+                   if tr.get("beats_coinflip")
+                   else "not statistically distinguishable from a 50% coin flip")
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(
+            f"<b>Model track record.</b> On walk-forward validation the winning model "
+            f"({escape(str(tr.get('best_model', 'ensemble')))}) called direction correctly "
+            f"{tr['hit_rate'] * 100:.0f}% of the time over {tr['n_steps']} steps "
+            f"(95% confidence interval {tr['ci_low'] * 100:.0f}% to {tr['ci_high'] * 100:.0f}%), "
+            f"{verdict}. Forecasting market direction is genuinely hard; treat the projection as "
+            f"one input, not a certainty.",
+            s_body_sm))
+
     story.append(PageBreak())
 
     # ── PAGE 3: RISK ANALYSIS ──
@@ -422,6 +440,33 @@ def generate_quarterly_report(output_path, data):
         story.append(Spacer(1, 6))
         story.append(Paragraph("What these numbers tell us", s_subheading))
         story.append(Paragraph(escape(narrative["risk_commentary"]), s_body_sm))
+
+    # Risk contribution by holding (component decomposition of portfolio vol).
+    ra = d.get("risk_attribution") or {}
+    if ra.get("rows"):
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Risk contribution by holding", s_subheading))
+        rc_rows = [["Holding", "Weight", "Share of risk"]]
+        for r in ra["rows"]:
+            rc_rows.append([r["ticker"], f"{r['weight'] * 100:.0f}%", f"{r['risk_pct'] * 100:.0f}%"])
+        story.append(styled_table(rc_rows, [0.44, 0.28, 0.28]))
+        story.append(Paragraph(
+            f"Share of the portfolio's {ra['portfolio_vol'] * 100:.1f}% annualized volatility "
+            f"attributable to each holding ({ra.get('n_obs', 0)} observations). A holding's risk "
+            f"share can exceed its weight when it is more volatile or more correlated with the rest "
+            f"of the book.",
+            s_disclaimer))
+
+    # Risk in one view: every downside measure on a common dollar basis, with
+    # any internal-consistency flags surfaced honestly.
+    rr = d.get("risk_reconciliation") or {}
+    if narrative.get("risk_synthesis") or rr.get("flags"):
+        story.append(Spacer(1, 8))
+        story.append(Paragraph("Risk in one view", s_subheading))
+        if narrative.get("risk_synthesis"):
+            story.append(Paragraph(escape(narrative["risk_synthesis"]), s_body_sm))
+        for fl in rr.get("flags", []):
+            story.append(Paragraph(f"Note: {escape(fl)}", s_disclaimer))
 
     story.append(PageBreak())
 

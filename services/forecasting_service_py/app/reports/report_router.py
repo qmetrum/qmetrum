@@ -554,6 +554,151 @@ def _performance_block(data: dict, session) -> Optional[dict]:
     }
 
 
+def _risk_attribution_block(data: dict) -> Optional[dict]:
+    """Decompose portfolio VOLATILITY into per-holding risk contributions from
+    the real return covariance. Component contributions sum to portfolio vol,
+    so 'which holding drives risk' becomes a computed number, not an assertion.
+
+    Percent contribution can differ sharply from weight (a small, volatile,
+    correlated position can dominate risk). Returns None without >=2 assets and
+    >=60 aligned observations. Never fabricated.
+    """
+    weights = data.get("weights") or {}
+    price_data = data.get("price_data") or {}
+    tickers = [t for t in weights if t in price_data and weights.get(t, 0) > 0]
+    if len(tickers) < 2:
+        return None
+
+    ret_cols = {}
+    for t in tickers:
+        df = price_data[t]
+        if df is None or not len(df):
+            continue
+        sd = df.copy()
+        sd["date"] = pd.to_datetime(sd["date"])
+        ret_cols[t] = sd.set_index("date")["price"].sort_index().pct_change()
+    if len(ret_cols) < 2:
+        return None
+
+    rets = pd.DataFrame(ret_cols).dropna()
+    if len(rets) < 60:
+        return None
+    tickers = list(rets.columns)
+    w = np.array([weights[t] for t in tickers], dtype=float)
+    if w.sum() <= 0:
+        return None
+    w = w / w.sum()
+
+    cov = rets.cov().values * 252.0  # annualized covariance
+    port_var = float(w @ cov @ w)
+    if port_var <= 0:
+        return None
+    port_vol = port_var ** 0.5
+    marginal = cov @ w                       # dσ/dw_i * σ  (MCTR numerator)
+    component = w * marginal / port_vol      # CCTR_i, sums to port_vol
+    rows = []
+    for i, t in enumerate(tickers):
+        rows.append({
+            "ticker": t,
+            "weight": float(w[i]),
+            "risk_contribution": float(component[i]),
+            "risk_pct": float(component[i] / port_vol) if port_vol else 0.0,
+        })
+    rows.sort(key=lambda r: r["risk_pct"], reverse=True)
+    return {"portfolio_vol": port_vol, "n_obs": int(len(rets)), "rows": rows}
+
+
+def _fragility_label(score) -> str:
+    """Bucket the fragility score against the engine's own 1.5 fragile flag, so
+    narrative language cannot overstate a below-threshold reading."""
+    try:
+        s = float(score)
+    except (TypeError, ValueError):
+        return "unavailable"
+    if s >= 1.5:
+        return "elevated (above the 1.5 fragile threshold)"
+    if s >= 1.15:
+        return "moderately above its long-run median but below the 1.5 fragile threshold"
+    if s >= 0.85:
+        return "near its long-run median"
+    return "below its long-run median"
+
+
+def _risk_reconciliation(data: dict, portfolio_value: float, scenario_rows: list,
+                         fc_facts: dict) -> dict:
+    """Put every downside measure on ONE dollar basis so they can be compared,
+    and flag internal inconsistencies (e.g. a 'stress' scenario milder than the
+    portfolio's own realized drawdown). All from real inputs."""
+    rm = data.get("risk_metrics") or {}
+    pv = float(portfolio_value)
+
+    def _dollars(pct):
+        return pv * float(pct) if pct is not None else None
+
+    var_1d = rm.get("var_95_daily")
+    max_dd = rm.get("max_drawdown")
+    # Worst simulated scenario (most negative return vs base).
+    worst = None
+    for row in scenario_rows or []:
+        r = row.get("return_pct")
+        if r is None:
+            continue
+        if worst is None or r < worst["return_pct"]:
+            worst = {"name": row.get("name"), "return_pct": r,
+                     "dollar_impact": row.get("dollar_impact")}
+    fc_low = fc_facts.get("range_low_pct")
+
+    flags = []
+    # Stress milder than realized history: worst scenario drawdown shallower
+    # than the actual max drawdown already experienced.
+    if worst is not None and max_dd is not None:
+        worst_dd_pct = worst["return_pct"] / 100.0
+        if worst_dd_pct > float(max_dd):
+            flags.append(
+                f"The worst simulated scenario ({worst['return_pct']:+.1f}%) is milder than "
+                f"the portfolio's own realized maximum drawdown ({float(max_dd) * 100:.1f}%); "
+                f"the stress set may understate tail risk."
+            )
+    return {
+        "portfolio_value": pv,
+        "var_1d_pct": var_1d,
+        "var_1d_dollars": _dollars(var_1d),
+        "max_drawdown_pct": max_dd,
+        "max_drawdown_dollars": _dollars(max_dd),
+        "worst_scenario": worst,
+        "worst_scenario_dollars": (_dollars(worst["return_pct"] / 100.0) if worst else None),
+        "forecast_downside_pct": fc_low,
+        "forecast_downside_dollars": (_dollars(fc_low / 100.0) if fc_low is not None else None),
+        "fragility_label": _fragility_label(rm.get("fragility_score")),
+        "flags": flags,
+    }
+
+
+def _forecast_track_record(data: dict) -> Optional[dict]:
+    """Directional accuracy of the winning model with a 95% confidence interval
+    and the coin-flip (50%) baseline, so a lay reader is not left thinking a hit
+    rate near 50% is meaningful (or dismissing a real edge). None when the
+    engine produced no validation figures."""
+    acc = _real_model_accuracy(data)
+    if not acc:
+        return None
+    p = float(acc["hit_rate"])
+    n = int(acc["n_steps"])
+    if n <= 0:
+        return None
+    half = 1.96 * ((p * (1 - p) / n) ** 0.5)
+    lo, hi = max(0.0, p - half), min(1.0, p + half)
+    return {
+        "hit_rate": p,
+        "n_steps": n,
+        "ci_low": lo,
+        "ci_high": hi,
+        "beats_coinflip": lo > 0.5,
+        "mape": float(acc["avg_error"]),
+        "best_model": acc["best_model"],
+    }
+
+
 def _pdf_response(filepath: str, filename: str) -> StreamingResponse:
     """Stream a PDF file as a download response."""
     def _stream():
@@ -906,6 +1051,17 @@ def generate_quarterly(
     except Exception as e:
         logger.warning(f"Quarterly performance block failed: {e}")
 
+    # Tier 3 analytics: component risk decomposition + forecast track record.
+    # (Risk reconciliation is computed after scenario_rows exist, below.)
+    try:
+        risk_attr = _risk_attribution_block(data)
+    except Exception as e:
+        logger.warning(f"Risk attribution failed: {e}"); risk_attr = None
+    try:
+        track_record = _forecast_track_record(data)
+    except Exception as e:
+        logger.warning(f"Forecast track record failed: {e}"); track_record = None
+
     # Real scenario section: derived from the client's simulated fans; the AI
     # narrative reuses the scenario explainer (content-hash cached, so a page
     # that already ran the analysis costs nothing here). Failures degrade to a
@@ -955,20 +1111,27 @@ def generate_quarterly(
         for a in payload.assets
     ]
 
+    fc_res = data.get("forecast_result") or {}
+    fp = fc_res.get("forecast_prices") or []
+    fc_facts = {}
+    if len(fp) >= 2 and fp[0]:
+        fc_facts["return_pct"] = (fp[-1] / fp[0] - 1) * 100
+        lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
+        if lo and hi and fp[0]:
+            # Plain return range a client can read, not "% of the median".
+            fc_facts["range_low_pct"] = (lo[-1] / fp[0] - 1) * 100
+            fc_facts["range_high_pct"] = (hi[-1] / fp[0] - 1) * 100
+
+    # Cross-section reconciliation (needs scenarios + forecast on one basis).
+    try:
+        risk_reconciliation = _risk_reconciliation(data, portfolio_value, scenario_rows, fc_facts)
+    except Exception as e:
+        logger.warning(f"Risk reconciliation failed: {e}"); risk_reconciliation = None
+
     # Narrative layer: written analysis grounded in the SAME real facts the
     # report renders. Unavailable -> numbers-only report, never invented text.
     narrative = None
     try:
-        fc_res = data.get("forecast_result") or {}
-        fp = fc_res.get("forecast_prices") or []
-        fc_facts = {}
-        if len(fp) >= 2 and fp[0]:
-            fc_facts["return_pct"] = (fp[-1] / fp[0] - 1) * 100
-            lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
-            if lo and hi and fp[0]:
-                # Plain return range a client can read, not "% of the median".
-                fc_facts["range_low_pct"] = (lo[-1] / fp[0] - 1) * 100
-                fc_facts["range_high_pct"] = (hi[-1] / fp[0] - 1) * 100
         narrative, _ = report_narrator.run(facts={
             "portfolio_name": payload.client_name,
             "portfolio_value": portfolio_value,
@@ -978,6 +1141,9 @@ def generate_quarterly(
             "scenarios": scenario_rows,
             "holdings": holdings_list,
             "performance": perf_block,
+            "risk_attribution": risk_attr,
+            "risk_reconciliation": risk_reconciliation,
+            "track_record": track_record,
         })
     except Exception as e:
         logger.warning(f"Report narrative unavailable: {e}")
@@ -999,6 +1165,9 @@ def generate_quarterly(
         "scenarios": scenario_rows,
         "scenario_analysis": scenario_analysis,
         "performance_block": perf_block,
+        "risk_attribution": risk_attr,
+        "risk_reconciliation": risk_reconciliation,
+        "track_record": track_record,
         "narrative": narrative,
     }
 

@@ -82,3 +82,36 @@ def test_run_raises_on_malformed_json():
     with patch.object(rn, "generate", return_value=_fake("nope")):
         with pytest.raises(ValueError, match="malformed JSON"):
             rn.run(facts=FACTS)
+
+
+# ---------------------------------------------------- Tier 3 analytics facts
+
+def test_prompt_surfaces_risk_attribution_and_reconciliation_flags():
+    facts = dict(
+        FACTS,
+        risk_attribution={"portfolio_vol": 0.16, "n_obs": 500, "rows": [
+            {"ticker": "AAPL", "weight": 0.25, "risk_pct": 0.55},
+            {"ticker": "BND", "weight": 0.35, "risk_pct": 0.11}]},
+        risk_reconciliation={
+            "var_1d_dollars": -52500, "var_1d_pct": -0.021,
+            "worst_scenario": {"name": "bear_10"}, "worst_scenario_dollars": -250000,
+            "max_drawdown_dollars": -450000, "max_drawdown_pct": -0.18,
+            "forecast_downside_dollars": -155000,
+            "fragility_label": "below the 1.5 fragile threshold",
+            "flags": ["stress milder than realized drawdown"]},
+        track_record={"hit_rate": 0.61, "n_steps": 84, "ci_low": 0.50, "ci_high": 0.72,
+                      "beats_coinflip": False, "mape": 0.034, "best_model": "prophet"},
+    )
+    p = rn.build_prompt(facts)
+    assert "risk share 55%" in p and "AAPL: weight 25%" in p       # component risk
+    assert "worst scenario (bear_10)" in p and "realized max drawdown" in p
+    assert "CONSISTENCY FLAG: stress milder than realized drawdown" in p
+    assert "directional accuracy 61% over 84 steps" in p and "NOT distinguishable from" in p
+    assert "1.5 fragile threshold" in p
+
+
+def test_run_returns_risk_synthesis_field():
+    payload = json.loads(_payload(risk_synthesis="On one basis the drawdown of -$450K is the most severe."))
+    with patch.object(rn, "generate", return_value=_fake(json.dumps(payload))):
+        out, _ = rn.run(facts=FACTS)
+    assert "most severe" in out["risk_synthesis"]
