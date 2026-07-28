@@ -293,6 +293,58 @@ class AlertEvent(SQLModel, table=True):
     evaluated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+class AlertFeedback(SQLModel, table=True):
+    """One user's verdict on one alert event: was it worth sending?
+
+    Two jobs. Immediately it drives per-user notification muting, which is the
+    defence against alert fatigue. Over time it accumulates labels — an alert
+    marked unhelpful during a calm stretch is a false positive, one marked
+    helpful around a real move is a true positive — which is the labeled data a
+    detector catalog otherwise needs hand-curating.
+    """
+    __table_args__ = (
+        UniqueConstraint("alert_event_id", "user_id",
+                         name="uq_alertfeedback_event_user"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    alert_event_id: int = Field(foreign_key="alertevent.id", index=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    # "useful" | "not_useful"
+    rating: str = Field(index=True)
+    reason: Optional[str] = Field(default=None)
+    # Denormalised so muting and label export do not need a join back through
+    # AlertEvent -> AlertRule for every row.
+    ticker: str = Field(default="", index=True)
+    alert_kind: str = Field(default="", index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
+class UserAlertPreference(SQLModel, table=True):
+    """Per-user notification behaviour. One row per user, created on demand."""
+    __table_args__ = (
+        UniqueConstraint("user_id", name="uq_useralertpreference_user"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    email_enabled: bool = Field(default=True)
+    # INFO | ALERT | WARNING | ANOMALY — anything below this is stored but not emailed.
+    min_severity: str = Field(default="ALERT")
+    # Local quiet hours, inclusive start / exclusive end, 0-23. Equal values = no quiet period.
+    quiet_hours_start: int = Field(default=0)
+    quiet_hours_end: int = Field(default=0)
+    quiet_hours_tz_offset_min: int = Field(default=0)
+    # Explicit mutes plus the auto-mutes earned by repeated "not useful" marks.
+    muted_tickers: list = Field(default_factory=list, sa_column=Column(JSON))
+    muted_kinds: list = Field(default_factory=list, sa_column=Column(JSON))
+    # Consecutive "not_useful" marks on a (ticker, kind) before it auto-mutes.
+    # 0 disables auto-muting.
+    auto_mute_after: int = Field(default=3)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class SavedScreen(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)

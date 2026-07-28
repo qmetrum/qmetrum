@@ -7,6 +7,7 @@ import { MetricCard } from "@/components/shared/MetricCard";
 import { RegimeBadge } from "@/components/shared/RegimeBadge";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
 import { AnomalyFeedCard } from "@/components/shared/AnomalyFeedCard";
+import { AlertSettingsCard } from "@/components/shared/AlertSettingsCard";
 
 export default function DashboardPage() {
   const { data: portfolios, isLoading: pLoading } = useQuery({
@@ -157,6 +158,7 @@ export default function DashboardPage() {
         <div className="lg:col-span-1 space-y-6">
           <AnomalyFeedCard title="Anomaly Feed" />
           <AlertRulesList title="Alerts" />
+          <AlertSettingsCard title="Alert Settings" />
         </div>
       </div>
     </div>

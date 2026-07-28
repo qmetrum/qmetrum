@@ -1,8 +1,13 @@
 "use client";
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { alertApi, type AlertEventResponse, type QpulseEventPayload } from "@/lib/api";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  alertApi,
+  type AlertEventResponse,
+  type AlertRating,
+  type QpulseEventPayload,
+} from "@/lib/api";
 
 type Props = {
   limit?: number;
@@ -70,11 +75,30 @@ function isQpulse(payload: unknown): payload is QpulseEventPayload {
  * card claims is the NAME of the catalog a given alert kind was gated on.
  */
 export function AnomalyFeedCard({ limit = 25, title = "Anomaly Feed" }: Props) {
+  const queryClient = useQueryClient();
+  const [rated, setRated] = useState<Record<number, AlertRating>>({});
+  const [muteNotice, setMuteNotice] = useState<string | null>(null);
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ["qpulse-events", limit],
     queryFn: () =>
       alertApi.events({ limit, triggered_only: true, detector_source: "qpulse" }),
     refetchInterval: 60_000,
+  });
+
+  const feedback = useMutation({
+    mutationFn: ({ id, rating }: { id: number; rating: AlertRating }) =>
+      alertApi.submitFeedback(id, rating),
+    onSuccess: (res, vars) => {
+      setRated((prev) => ({ ...prev, [vars.id]: vars.rating }));
+      if (res.auto_muted_kind) {
+        setMuteNotice(
+          `Muted "${res.auto_muted_kind}" alerts after repeated unhelpful ratings. ` +
+            `Undo in alert settings.`,
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["alert-preferences"] });
+    },
   });
 
   // Filter client-side too. Amplify and ECS deploy independently, so during a
@@ -172,11 +196,55 @@ export function AnomalyFeedCard({ limit = 25, title = "Anomaly Feed" }: Props) {
                       · experimental
                     </span>
                   )}
+
+                  <span className="ml-auto flex items-center gap-1">
+                    {rated[ev.id] ? (
+                      <span className="text-[10px] text-[var(--text-muted)]">
+                        {rated[ev.id] === "useful" ? "marked useful" : "marked not useful"}
+                      </span>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          aria-label="Mark this alert useful"
+                          disabled={feedback.isPending}
+                          onClick={() => feedback.mutate({ id: ev.id, rating: "useful" })}
+                          className="rounded px-1.5 py-0.5 text-[11px] text-[var(--text-muted)] hover:bg-[var(--card-muted)] disabled:opacity-40"
+                          title="Useful — send more like this"
+                        >
+                          👍
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Mark this alert not useful"
+                          disabled={feedback.isPending}
+                          onClick={() => feedback.mutate({ id: ev.id, rating: "not_useful" })}
+                          className="rounded px-1.5 py-0.5 text-[11px] text-[var(--text-muted)] hover:bg-[var(--card-muted)] disabled:opacity-40"
+                          title="Not useful — fewer like this"
+                        >
+                          👎
+                        </button>
+                      </>
+                    )}
+                  </span>
                 </div>
               </li>
             );
           })}
         </ul>
+      )}
+
+      {muteNotice && (
+        <div className="border-t border-[var(--card-border)] bg-[var(--amber-light)] px-5 py-2 text-[11px] text-[var(--amber)]">
+          {muteNotice}
+          <button
+            type="button"
+            onClick={() => setMuteNotice(null)}
+            className="ml-2 underline"
+          >
+            dismiss
+          </button>
+        </div>
       )}
     </div>
   );

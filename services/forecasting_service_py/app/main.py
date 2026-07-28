@@ -61,6 +61,8 @@ from app.db.models import (
     WatchlistItem,
     AlertRule,
     AlertEvent,
+    AlertFeedback,
+    UserAlertPreference,
     SavedScreen,
     User,
     UserStoragePreference,
@@ -4380,6 +4382,283 @@ def create_alert(
         return alert
 
 
+# -------------------------------------------------------------------
+# Alert preferences + feedback
+# -------------------------------------------------------------------
+
+SEVERITY_ORDER = {"INFO": 0, "ALERT": 1, "WARNING": 2, "ANOMALY": 3}
+
+
+class AlertPreferenceUpdate(BaseModel):
+    email_enabled: Optional[bool] = None
+    min_severity: Optional[str] = None
+    quiet_hours_start: Optional[int] = None
+    quiet_hours_end: Optional[int] = None
+    quiet_hours_tz_offset_min: Optional[int] = None
+    muted_tickers: Optional[List[str]] = None
+    muted_kinds: Optional[List[str]] = None
+    auto_mute_after: Optional[int] = None
+
+
+class AlertFeedbackIn(BaseModel):
+    rating: str          # "useful" | "not_useful"
+    reason: Optional[str] = None
+
+
+def _get_or_create_prefs(session: Session, user_id: int) -> UserAlertPreference:
+    prefs = session.exec(
+        select(UserAlertPreference).where(UserAlertPreference.user_id == user_id)
+    ).first()
+    if prefs is None:
+        prefs = UserAlertPreference(user_id=user_id)
+        session.add(prefs)
+        session.commit()
+        session.refresh(prefs)
+    return prefs
+
+
+def _in_quiet_hours(prefs: UserAlertPreference, when: datetime) -> bool:
+    """Quiet hours in the user's local time, honouring windows over midnight."""
+    start, end = prefs.quiet_hours_start, prefs.quiet_hours_end
+    if start == end:
+        return False
+    local_hour = (when + timedelta(minutes=prefs.quiet_hours_tz_offset_min or 0)).hour
+    if start < end:
+        return start <= local_hour < end
+    return local_hour >= start or local_hour < end   # wraps midnight
+
+
+def _should_email(prefs: UserAlertPreference, ticker: str, kind: str,
+                  severity: Optional[str], when: datetime) -> bool:
+    """Whether this user wants this specific alert in their inbox right now."""
+    if not prefs.email_enabled:
+        return False
+    if ticker.upper() in {t.upper() for t in (prefs.muted_tickers or [])}:
+        return False
+    if kind.lower() in {k.lower() for k in (prefs.muted_kinds or [])}:
+        return False
+    floor = SEVERITY_ORDER.get((prefs.min_severity or "ALERT").upper(), 1)
+    # Unknown severities are allowed through rather than silently dropped.
+    if SEVERITY_ORDER.get(str(severity or "").upper(), 99) < floor:
+        return False
+    if _in_quiet_hours(prefs, when):
+        return False
+    return True
+
+
+@app.get("/alerts/preferences")
+def get_alert_preferences(
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        return _get_or_create_prefs(session, user.id)
+
+
+@app.put("/alerts/preferences")
+def update_alert_preferences(
+    payload: AlertPreferenceUpdate,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        prefs = _get_or_create_prefs(session, user.id)
+
+        data = payload.model_dump(exclude_unset=True)
+        if "min_severity" in data and data["min_severity"] is not None:
+            sev = str(data["min_severity"]).upper()
+            if sev not in SEVERITY_ORDER:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"min_severity must be one of {sorted(SEVERITY_ORDER)}")
+            data["min_severity"] = sev
+        for field in ("quiet_hours_start", "quiet_hours_end"):
+            if data.get(field) is not None and not (0 <= int(data[field]) <= 23):
+                raise HTTPException(status_code=422,
+                                    detail=f"{field} must be between 0 and 23")
+        if data.get("muted_tickers") is not None:
+            data["muted_tickers"] = sorted({_canonical_symbol(t)
+                                            for t in data["muted_tickers"] if str(t).strip()})
+        if data.get("muted_kinds") is not None:
+            data["muted_kinds"] = sorted({str(k).strip().lower()
+                                          for k in data["muted_kinds"] if str(k).strip()})
+        if data.get("auto_mute_after") is not None:
+            data["auto_mute_after"] = max(0, int(data["auto_mute_after"]))
+
+        for key, value in data.items():
+            setattr(prefs, key, value)
+        prefs.updated_at = datetime.utcnow()
+        session.add(prefs)
+        session.commit()
+        session.refresh(prefs)
+        return prefs
+
+
+@app.post("/alerts/events/{event_id}/feedback")
+def submit_alert_feedback(
+    event_id: int,
+    payload: AlertFeedbackIn,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Record whether an alert was worth sending, and auto-mute if it wasn't.
+
+    Muting is scoped to the (ticker, kind) pair and to this user only. It
+    deliberately does NOT retune the detector: a shared Qpulse instance serves
+    every user, so one person's judgement must not change what others see.
+    """
+    rating = str(payload.rating).strip().lower()
+    if rating not in {"useful", "not_useful"}:
+        raise HTTPException(status_code=422,
+                            detail="rating must be 'useful' or 'not_useful'")
+
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+
+        event = session.get(AlertEvent, event_id)
+        if not event:
+            raise HTTPException(status_code=404, detail="Alert event not found")
+        rule = session.get(AlertRule, event.alert_id) if event.alert_id else None
+        if not rule or rule.user_id != user.id:
+            # Same response for "not yours" as "not found": rating another
+            # user's event must not confirm that it exists.
+            raise HTTPException(status_code=404, detail="Alert event not found")
+
+        kind = str(((event.payload or {}).get("qpulse") or {}).get("kind", "")) \
+            or str(event.alert_type or "")
+
+        existing = session.exec(
+            select(AlertFeedback)
+            .where(AlertFeedback.alert_event_id == event_id)
+            .where(AlertFeedback.user_id == user.id)
+        ).first()
+        if existing:
+            existing.rating = rating
+            existing.reason = payload.reason
+            session.add(existing)
+        else:
+            session.add(AlertFeedback(
+                alert_event_id=event_id, user_id=user.id, rating=rating,
+                reason=payload.reason, ticker=event.ticker, alert_kind=kind,
+            ))
+        session.commit()
+
+        prefs = _get_or_create_prefs(session, user.id)
+        auto_muted = False
+        if rating == "not_useful" and prefs.auto_mute_after > 0 and kind:
+            recent = session.exec(
+                select(AlertFeedback)
+                .where(AlertFeedback.user_id == user.id)
+                .where(AlertFeedback.ticker == event.ticker)
+                .where(AlertFeedback.alert_kind == kind)
+                .order_by(AlertFeedback.created_at.desc())
+                .limit(prefs.auto_mute_after)
+            ).all()
+            enough = len(recent) >= prefs.auto_mute_after
+            if enough and all(f.rating == "not_useful" for f in recent):
+                muted = list(prefs.muted_kinds or [])
+                if kind.lower() not in {m.lower() for m in muted}:
+                    muted.append(kind.lower())
+                    prefs.muted_kinds = muted
+                    prefs.updated_at = datetime.utcnow()
+                    session.add(prefs)
+                    session.commit()
+                    auto_muted = True
+
+        return {"ok": True, "rating": rating, "auto_muted_kind": kind if auto_muted else None}
+
+
+@app.get("/alerts/feedback/summary")
+def alert_feedback_summary(
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """What this user has rated — the raw material for tuning, and for the
+    labeled catalog the validation work would otherwise curate by hand."""
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        rows = session.exec(
+            select(AlertFeedback).where(AlertFeedback.user_id == user.id)
+        ).all()
+        by_kind: Dict[str, Dict[str, int]] = {}
+        for f in rows:
+            bucket = by_kind.setdefault(f.alert_kind or "unknown",
+                                        {"useful": 0, "not_useful": 0})
+            bucket[f.rating] = bucket.get(f.rating, 0) + 1
+        return {
+            "total": len(rows),
+            "useful": sum(1 for f in rows if f.rating == "useful"),
+            "not_useful": sum(1 for f in rows if f.rating == "not_useful"),
+            "by_kind": by_kind,
+        }
+
+
+class MonitorHoldingsRequest(BaseModel):
+    portfolio_id: Optional[int] = None   # omit to cover every portfolio
+    cooldown_seconds: Optional[int] = None
+
+
+@app.post("/alerts/monitor-holdings")
+def monitor_holdings(
+    payload: MonitorHoldingsRequest,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Create a Qpulse anomaly rule for every ticker the user holds.
+
+    Onboarding currently means adding rules one ticker at a time; this makes it
+    one action. Idempotent — tickers already covered are reported, not
+    duplicated, since duplicate rules would fan an alert out twice.
+    """
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+
+        pf_query = select(Portfolio).where(Portfolio.user_id == user.id)
+        if payload.portfolio_id is not None:
+            pf_query = pf_query.where(Portfolio.id == payload.portfolio_id)
+        portfolios = session.exec(pf_query).all()
+        if payload.portfolio_id is not None and not portfolios:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+
+        pf_ids = [p.id for p in portfolios]
+        tickers = sorted({
+            _canonical_symbol(pos.ticker)
+            for pos in session.exec(
+                select(Position).where(Position.portfolio_id.in_(pf_ids))
+            ).all() if pos.ticker
+        }) if pf_ids else []
+
+        existing = {
+            r.ticker for r in session.exec(
+                select(AlertRule)
+                .where(AlertRule.user_id == user.id)
+                .where(AlertRule.alert_type == "anomaly")
+            ).all()
+            if str((r.extra_config or {}).get("detector", "")).lower() == "qpulse"
+        }
+
+        cfg = {"detector": "qpulse"}
+        if payload.cooldown_seconds is not None:
+            cfg["cooldown_seconds"] = max(0, int(payload.cooldown_seconds))
+
+        created = []
+        for ticker in tickers:
+            if ticker in existing:
+                continue
+            _ensure_asset(session, ticker)
+            session.add(AlertRule(
+                user_id=user.id, name=f"{ticker} anomaly (Qpulse)", ticker=ticker,
+                alert_type="anomaly", is_active=True, extra_config=dict(cfg),
+            ))
+            created.append(ticker)
+        session.commit()
+
+        return {"created": created, "already_monitored": sorted(existing & set(tickers)),
+                "total_monitored": len(existing | set(tickers))}
+
+
 @app.put("/alerts/{alert_id}")
 def update_alert(
     alert_id: int,
@@ -4762,12 +5041,23 @@ def qpulse_ingest(
         # throttles delivery.
         if email_jobs and is_email_configured():
             uid_to_email = {}
+            uid_to_prefs = {}
             for uid in {j[0] for j in email_jobs}:
                 user = session.get(User, uid)
                 if user and user.email and user.is_active:
                     uid_to_email[uid] = user.email
-            email_jobs = [(uid_to_email[u], n, t, p) for (u, n, t, p) in email_jobs
-                          if u in uid_to_email]
+                    uid_to_prefs[uid] = _get_or_create_prefs(session, uid)
+            # The event is already stored; preferences decide only whether it
+            # also lands in an inbox. A muted alert is still visible in the UI.
+            allowed = []
+            for (uid, name, tkr, pl) in email_jobs:
+                if uid not in uid_to_email:
+                    continue
+                q = (pl.get("qpulse") or {})
+                if _should_email(uid_to_prefs[uid], tkr, str(q.get("kind", "")),
+                                 q.get("severity"), now):
+                    allowed.append((uid_to_email[uid], name, tkr, pl))
+            email_jobs = allowed
         else:
             email_jobs = []
 

@@ -707,6 +707,49 @@ export const alertApi = {
 
   remove: async (alertId: number) =>
     (await api.delete<{ deleted: boolean; alert_id: number }>(`/alerts/${alertId}`)).data,
+
+  preferences: async () =>
+    (await api.get<AlertPreferences>("/alerts/preferences")).data,
+
+  updatePreferences: async (payload: Partial<AlertPreferences>) =>
+    (await api.put<AlertPreferences>("/alerts/preferences", payload)).data,
+
+  submitFeedback: async (eventId: number, rating: AlertRating, reason?: string) =>
+    (await api.post<{ ok: boolean; rating: AlertRating; auto_muted_kind: string | null }>(
+      `/alerts/events/${eventId}/feedback`, { rating, reason })).data,
+
+  feedbackSummary: async () =>
+    (await api.get<AlertFeedbackSummary>("/alerts/feedback/summary")).data,
+
+  monitorHoldings: async (payload?: { portfolio_id?: number; cooldown_seconds?: number }) =>
+    (await api.post<{ created: string[]; already_monitored: string[]; total_monitored: number }>(
+      "/alerts/monitor-holdings", payload ?? {})).data,
+};
+
+export type AlertRating = "useful" | "not_useful";
+
+export type AlertSeverity = "INFO" | "ALERT" | "WARNING" | "ANOMALY";
+
+export type AlertPreferences = {
+  id: number;
+  user_id: number;
+  email_enabled: boolean;
+  min_severity: AlertSeverity;
+  /** Inclusive start, exclusive end, 0-23. Equal values disable quiet hours. */
+  quiet_hours_start: number;
+  quiet_hours_end: number;
+  quiet_hours_tz_offset_min: number;
+  muted_tickers: string[];
+  muted_kinds: string[];
+  /** Consecutive "not useful" marks before a kind auto-mutes. 0 disables. */
+  auto_mute_after: number;
+};
+
+export type AlertFeedbackSummary = {
+  total: number;
+  useful: number;
+  not_useful: number;
+  by_kind: Record<string, { useful: number; not_useful: number }>;
 };
 
 export type CommentaryResponse = {

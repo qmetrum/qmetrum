@@ -49,3 +49,22 @@ emails) only happen while the backend task is running. With the app scaled to
 zero when idle, alerts are not evaluated until it is up. For always-on
 monitoring, move evaluation to an external trigger (EventBridge schedule -> a
 small `POST /alerts/evaluate` task) independent of the web service.
+
+## Per-user preferences (added 2026-07-28)
+
+Delivery is filtered per recipient before any send, via `UserAlertPreference`:
+
+- `email_enabled` — master switch for this user's inbox
+- `min_severity` — INFO | ALERT | WARNING | ANOMALY floor (default ALERT)
+- quiet hours — start/end hour plus a timezone offset, wrapping midnight correctly
+- `muted_tickers` / `muted_kinds` — explicit mutes, plus auto-mutes earned after
+  `auto_mute_after` consecutive "not useful" ratings on a (ticker, kind) pair
+
+A muted or out-of-hours alert is still stored and still shows in the dashboard
+feed — preferences govern email only, never what gets detected or recorded.
+
+Feedback lives in `AlertFeedback` (one row per user per event, upserted on
+re-rating). Muting is deliberately scoped to the rating user: the Qpulse
+detector is shared, so one person's judgement must not change what anyone else
+sees. Both tables arrive in migration `20260728_0014`, which is additive and
+safe to apply to a running database.
