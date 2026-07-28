@@ -581,6 +581,21 @@ export const portfolioApi = {
   create: async (payload: PortfolioUpsertPayload) =>
     (await api.post<PortfolioResponse>("/portfolios", payload)).data,
 
+  importCsv: async (file: File, name?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (name) form.append("name", name);
+    return (await api.post<PortfolioResponse & {
+      import_report: {
+        imported: number;
+        skipped: { row: number; reason: string }[];
+        warnings: string[];
+        weight_basis: string;
+        columns_detected: Record<string, string>;
+      };
+    }>("/portfolios/import", form, { timeout: HEAVY_TIMEOUT_MS })).data;
+  },
+
   update: async (id: string | number, payload: PortfolioUpsertPayload) =>
     (await api.put<PortfolioResponse>(`/portfolios/${id}`, payload)).data,
 

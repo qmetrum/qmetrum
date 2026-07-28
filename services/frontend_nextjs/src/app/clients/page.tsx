@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useBranding } from "@/components/providers/BrandingProvider";
@@ -55,6 +55,39 @@ export default function ClientsPage() {
     },
   });
 
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [importResult, setImportResult] = useState<
+    { name: string; count: number; basis: string; warnings: string[]; skipped: number } | null
+  >(null);
+  const importMutation = useMutation({
+    mutationFn: (file: File) => portfolioApi.importCsv(file),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["portfolios-list"] });
+      setImportResult({
+        name: res.name,
+        count: res.import_report.imported,
+        basis: res.import_report.weight_basis,
+        warnings: res.import_report.warnings ?? [],
+        skipped: (res.import_report.skipped ?? []).length,
+      });
+    },
+  });
+  const importErr = importMutation.error as
+    | { response?: { data?: { detail?: string } }; message?: string }
+    | null;
+  const importErrorMsg = importErr
+    ? importErr.response?.data?.detail ?? importErr.message ?? "Import failed"
+    : null;
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f) {
+      setImportResult(null);
+      importMutation.mutate(f);
+    }
+    e.target.value = ""; // allow re-importing the same filename
+  }
+
   function addAssetRow() {
     setNewPortfolio({
       ...newPortfolio,
@@ -77,13 +110,53 @@ export default function ClientsPage() {
             Manage client portfolios and generate reports
           </p>
         </div>
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="rounded-lg bg-[var(--teal)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition-opacity"
-        >
-          {showCreate ? "Cancel" : "Add Client Portfolio"}
-        </button>
+        <div className="flex items-center gap-2">
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".csv,text/csv"
+            onChange={onPickFile}
+            className="hidden"
+          />
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={importMutation.isPending}
+            className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--content-bg)] disabled:opacity-50 transition-colors"
+            title="Import real holdings from a custodian or brokerage CSV export"
+          >
+            {importMutation.isPending ? "Importing…" : "Import holdings (CSV)"}
+          </button>
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            className="rounded-lg bg-[var(--teal)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 transition-opacity"
+          >
+            {showCreate ? "Cancel" : "Add Client Portfolio"}
+          </button>
+        </div>
       </div>
+
+      {importErrorMsg && (
+        <div className="rounded-lg bg-[var(--coral-light)] px-4 py-2.5 text-sm text-[var(--coral)]">
+          Import failed: {importErrorMsg}
+        </div>
+      )}
+      {importResult && (
+        <div className="rounded-lg bg-[var(--teal-light)] px-4 py-2.5 text-sm text-[var(--text-primary)]">
+          Imported <span className="font-semibold">{importResult.count}</span> holdings into{" "}
+          <span className="font-semibold">{importResult.name}</span>
+          {importResult.basis === "market_value"
+            ? " (weights from live market value)"
+            : importResult.basis === "supplied_weight"
+              ? " (weights from the file)"
+              : " (equal-weighted — add quantities to get real weights)"}
+          {importResult.skipped > 0 && ` · ${importResult.skipped} row(s) skipped`}
+          {importResult.warnings.length > 0 && (
+            <span className="block text-xs text-[var(--text-muted)] mt-0.5">
+              {importResult.warnings.join(" ")}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Create form */}
       {showCreate && (
