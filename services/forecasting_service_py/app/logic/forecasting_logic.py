@@ -498,14 +498,27 @@ class HybridForecaster:
     def _project_future_exog(self, forecast_horizon_days):
         """
         Forecast each exogenous feature with a bounded AR(1)-style recursion
-        instead of a fixed scalar decay.
+        instead of a fixed scalar decay. Production forward path.
         """
         if self.exogenous_data_for_training is None or len(self.exogenous_data_for_training) == 0:
             base = self.last_exogenous_row.flatten() if self.last_exogenous_row is not None else np.array([])
             return np.tile(base, (forecast_horizon_days, 1))
+        return self._project_exog_from(self.exogenous_data_for_training, forecast_horizon_days)
 
-        hist = np.asarray(self.exogenous_data_for_training, dtype=float)
+    @staticmethod
+    def _project_exog_from(hist, forecast_horizon_days):
+        """Project exogenous features forward from an EXPLICIT history prefix,
+        using the identical bounded AR(1) recursion as production. This is what
+        makes walk-forward validation point-in-time honest: each fold projects
+        the future exog from its own train prefix, exactly as production would,
+        instead of peeking at the true future exog rows (which encode the future
+        price direction/level/vol and inflate the metrics)."""
+        hist = np.asarray(hist, dtype=float)
+        if hist.ndim == 1:
+            hist = hist.reshape(-1, 1)
         n_obs, n_cols = hist.shape
+        if n_obs == 0:
+            return np.zeros((forecast_horizon_days, n_cols), dtype=float)
         if n_obs == 1:
             return np.repeat(hist, forecast_horizon_days, axis=0)
 
@@ -720,7 +733,9 @@ class HybridForecaster:
                     train_y = log_returns[: train_end - 1]
                     test_y = log_returns[train_end - 1 : test_end - 1]
                     train_ex = exog_ret[: train_end - 1]
-                    test_ex = exog_ret[train_end - 1 : test_end - 1]
+                    # Point-in-time: project the future exog from the train
+                    # prefix (as production does), never slice the true future.
+                    test_ex = self._project_exog_from(train_ex, len(test_y))
                     if len(test_y) == 0 or len(train_y) < 20:
                         continue
                     model, _ = self._fit_arima_model(train_y, train_ex, arima_order, arima_trend)
@@ -736,7 +751,8 @@ class HybridForecaster:
                     train_y = log_prices[:train_end]
                     test_y = log_prices[train_end:test_end]
                     train_ex = exog_all[:train_end]
-                    test_ex = exog_all[train_end:test_end]
+                    # Point-in-time: project future exog from the train prefix.
+                    test_ex = self._project_exog_from(train_ex, len(test_y))
                     if len(test_y) == 0 or len(train_y) < 20:
                         continue
                     model, _ = self._fit_arima_model(train_y, train_ex, arima_order, arima_trend)
@@ -760,7 +776,8 @@ class HybridForecaster:
                 train_ret_y = log_returns[: train_end - 1]
                 test_ret_y = log_returns[train_end - 1 : test_end - 1]
                 train_ret_X = exog_ret[: train_end - 1]
-                test_ret_X = exog_ret[train_end - 1 : test_end - 1]
+                # Point-in-time: project future exog from the train prefix.
+                test_ret_X = self._project_exog_from(train_ret_X, len(test_ret_y))
                 if len(test_ret_y) == 0 or len(train_ret_y) <= self.lstm_lookback + 2:
                     continue
 
@@ -799,7 +816,8 @@ class HybridForecaster:
                 train_y = log_prices[:train_end]
                 test_y = log_prices[train_end:test_end]
                 train_ex = exog_all[:train_end]
-                test_ex = exog_all[train_end:test_end]
+                # Point-in-time: project future exog from the train prefix.
+                test_ex = self._project_exog_from(train_ex, len(test_y))
                 if len(test_y) == 0 or len(train_y) < 30:
                     continue
 
@@ -1024,11 +1042,16 @@ class HybridForecaster:
         
         test_size = 30 if len(raw_prices) > 50 else 5
         
+        # Point-in-time: the single-split validators must NOT see the true
+        # future exog either (same leak as the walk-forward path). Project the
+        # test-window exog from the train prefix, exactly as production does.
         train_ret_y, test_ret_y = log_returns[:-test_size], log_returns[-test_size:]
-        train_ret_X, test_ret_X = exog_ret[:-test_size], exog_ret[-test_size:]
-        
+        train_ret_X = exog_ret[:-test_size]
+        test_ret_X = self._project_exog_from(train_ret_X, test_size)
+
         train_lev_y, test_lev_y = log_prices[:-test_size], log_prices[-test_size:]
-        train_lev_X, test_lev_X = exog_lev[:-test_size], exog_lev[-test_size:]
+        train_lev_X = exog_lev[:-test_size]
+        test_lev_X = self._project_exog_from(train_lev_X, test_size)
         
         train_df_pro = df_prophet.iloc[:-test_size]
 
