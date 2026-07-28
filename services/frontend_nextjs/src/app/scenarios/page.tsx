@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useBranding } from "@/components/providers/BrandingProvider";
 import {
@@ -42,6 +42,13 @@ const PRESETS: { name: string; shock: number; volScale: number; drift: number; c
   { name: "Rate Spike", shock: -3, volScale: 1.5, drift: -0.0005, color: "#2B7ACC" },
   { name: "Strong Recovery", shock: 5, volScale: 0.8, drift: 0.002, color: "#0F8B6E" },
 ];
+
+type ScenarioSpec = { name: string; shock: number; volScale: number; drift: number; color: string };
+
+// The user's scenario set (presets they kept + customs they added) persists
+// across refreshes. Scenario definitions are shock specs independent of any
+// portfolio, so one global list is correct.
+const SCENARIOS_KEY = "qsight.scenarios.v1";
 
 const CUSTOM_COLORS = [
   "#7C5CBF", // purple
@@ -87,7 +94,36 @@ export default function ScenariosPage() {
   // describe the results on screen, not the live checkbox state.
   const [runHadBuiltins, setRunHadBuiltins] = useState(true);
   const [runError, setRunError] = useState<string | null>(null);
+  // Non-error "still computing / come back" state, distinct from a failure.
+  const [runNotice, setRunNotice] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<{ elapsed: number; progress: number | null } | null>(null);
+
+  // Persist the scenario set across refreshes. Hydrate from localStorage on
+  // mount (server + first client render use PRESETS to avoid a hydration
+  // mismatch); only start saving AFTER hydration so we never clobber a stored
+  // set with the default PRESETS. An empty stored array is respected (the user
+  // may have deleted every preset on purpose).
+  const scenariosLoaded = useRef(false);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(SCENARIOS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as ScenarioSpec[];
+        if (Array.isArray(parsed)) setScenarios(parsed);
+      }
+    } catch {
+      /* corrupt/unavailable storage: fall back to PRESETS already in state */
+    }
+    scenariosLoaded.current = true;
+  }, []);
+  useEffect(() => {
+    if (!scenariosLoaded.current) return;
+    try {
+      window.localStorage.setItem(SCENARIOS_KEY, JSON.stringify(scenarios));
+    } catch {
+      /* storage full / disabled: persistence just won't happen */
+    }
+  }, [scenarios]);
 
   const translateMutation = useMutation({
     mutationFn: (desc: string) => agentsApi.translateScenario(desc),
@@ -130,6 +166,7 @@ export default function ScenariosPage() {
     if (!selectedPortfolio) return;
     setRunning(true);
     setRunError(null);
+    setRunNotice(null);
     setRunProgress(null);
     const t0 = Date.now();
     try {
@@ -150,9 +187,22 @@ export default function ScenariosPage() {
       );
       if (res.mode === "job" && res.job_id) {
         const jobId = res.job_id;
+        let pollFails = 0;
         for (;;) {
           await new Promise((r) => setTimeout(r, 3000));
-          const j = await forecastJobApi.get(jobId);
+          let j: Awaited<ReturnType<typeof forecastJobApi.get>>;
+          try {
+            j = await forecastJobApi.get(jobId);
+            pollFails = 0; // recovered
+          } catch {
+            // A transient network blip must not kill a healthy job. Tolerate a
+            // few in a row; only give up (gracefully) if polling is truly lost.
+            if (++pollFails < 8) continue;
+            setRunNotice(
+              "Lost the connection while your scenarios were computing. The job keeps running on the server; click Run again shortly to pick up the result.",
+            );
+            return;
+          }
           setRunProgress({
             elapsed: Math.round((Date.now() - t0) / 1000),
             progress: typeof j.job?.progress === "number" ? j.job.progress : null,
@@ -164,13 +214,15 @@ export default function ScenariosPage() {
           if (j.job?.status === "failed") {
             throw new Error(j.job?.error_message || j.error || "Scenario computation failed on the server");
           }
-          // Keep polling while the server says the job is alive — the backend
-          // reaps orphans on restart, so "running" is trustworthy. The cap is
-          // only a backstop against a crash-looping server.
+          // Taking a long time is NOT an error: the job keeps running
+          // server-side (the backend reaps genuine orphans on restart) and its
+          // result is cached. Stop watching and invite the user back, rather
+          // than throwing a red error on a perfectly healthy computation.
           if (Date.now() - t0 > 45 * 60_000) {
-            throw new Error(
-              "Gave up waiting after 45 minutes — the job may still be running server-side; hit Run later to re-attach.",
+            setRunNotice(
+              "This is taking longer than usual, so we have stopped watching here. The calculation keeps running on the server and the result is saved. Come back in a few minutes and click Run again: it will load instantly from the cache.",
             );
+            return;
           }
         }
       }
@@ -234,6 +286,16 @@ export default function ScenariosPage() {
         color: pickNextColor(prev.map((s) => s.color)),
       },
     ]);
+  }
+
+  // Re-add a preset template to the active set (no-op if already present).
+  function addPreset(p: ScenarioSpec) {
+    setScenarios((prev) => {
+      if (prev.some((s) => s.name === p.name)) return prev;
+      const used = prev.map((s) => s.color);
+      const color = used.includes(p.color) ? pickNextColor(used) : p.color;
+      return [...prev, { ...p, color }];
+    });
   }
 
   async function exportPdf() {
@@ -518,6 +580,11 @@ export default function ScenariosPage() {
                 Scenario run failed: {runError}
               </div>
             )}
+            {runNotice && !running && (
+              <div className="rounded-lg bg-[var(--amber-light)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                {runNotice}
+              </div>
+            )}
             <button
               onClick={exportPdf}
               disabled={!selectedPortfolio}
@@ -530,27 +597,37 @@ export default function ScenariosPage() {
 
         {/* Results */}
         <div className="lg:col-span-2 space-y-4">
-          {/* Scenario Templates */}
+          {/* Scenario Templates — click to add a preset back to your set */}
           <div className="q-card p-5">
-            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-3">Scenario Templates</h2>
+            <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1">Scenario Templates</h2>
+            <p className="text-[10px] text-[var(--text-muted)] mb-3">
+              Click a template to add it to your active scenarios. Your set (customs and any
+              templates you keep or remove) is saved and restored on your next visit.
+            </p>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-              {PRESETS.map((p) => (
-                <button
-                  key={p.name}
-                  onClick={() => {
-                    setEquityShock(p.shock);
-                    setVolScale(p.volScale);
-                    setDriftShift(p.drift);
-                    setCustomName(p.name);
-                  }}
-                  className="rounded-lg border border-[var(--border)] px-3 py-2.5 text-left hover:border-[var(--teal)] transition-colors"
-                >
-                  <span className="text-xs font-semibold text-[var(--text-primary)]">{p.name}</span>
-                  <span className="mt-0.5 block text-[10px] text-[var(--text-muted)]">
-                    Shock: {p.shock}% | Vol: {p.volScale}x
-                  </span>
-                </button>
-              ))}
+              {PRESETS.map((p) => {
+                const active = scenarios.some((s) => s.name === p.name);
+                return (
+                  <button
+                    key={p.name}
+                    onClick={() => addPreset(p)}
+                    disabled={active}
+                    className={`rounded-lg border px-3 py-2.5 text-left transition-colors ${
+                      active
+                        ? "border-[var(--border)] opacity-50 cursor-default"
+                        : "border-[var(--border)] hover:border-[var(--teal)]"
+                    }`}
+                  >
+                    <span className="flex items-center gap-1 text-xs font-semibold text-[var(--text-primary)]">
+                      {p.name}
+                      {active && <span className="text-[9px] font-normal text-[var(--teal)]">· added</span>}
+                    </span>
+                    <span className="mt-0.5 block text-[10px] text-[var(--text-muted)]">
+                      Shock: {p.shock}% | Vol: {p.volScale}x
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
