@@ -574,6 +574,15 @@ export const assetApi = {
     ).data,
 };
 
+export type ImportHolding = {
+  ticker: string;
+  quantity: number;
+  cost_basis: number;
+  purchase_date: string | null;
+  asset_type: string;
+  weight: number;
+};
+
 export const portfolioApi = {
   get: async (id: string | number) =>
     (await api.get<PortfolioResponse>(`/portfolios/${id}`)).data,
@@ -581,20 +590,25 @@ export const portfolioApi = {
   create: async (payload: PortfolioUpsertPayload) =>
     (await api.post<PortfolioResponse>("/portfolios", payload)).data,
 
-  importCsv: async (file: File, name?: string) => {
+  importParse: async (file: File) => {
     const form = new FormData();
     form.append("file", file);
-    if (name) form.append("name", name);
-    return (await api.post<PortfolioResponse & {
-      import_report: {
+    return (await api.post<{
+      holdings: ImportHolding[];
+      report: {
         imported: number;
         skipped: { row: number; reason: string }[];
         warnings: string[];
         weight_basis: string;
         columns_detected: Record<string, string>;
       };
-    }>("/portfolios/import", form, { timeout: HEAVY_TIMEOUT_MS })).data;
+    }>("/portfolios/import/parse", form, { timeout: HEAVY_TIMEOUT_MS })).data;
   },
+
+  importCommit: async (name: string, holdings: ImportHolding[]) =>
+    (await api.post<PortfolioResponse & {
+      import_report: { imported: number; weight_basis: string };
+    }>("/portfolios/import/commit", { name, holdings })).data,
 
   update: async (id: string | number, payload: PortfolioUpsertPayload) =>
     (await api.put<PortfolioResponse>(`/portfolios/${id}`, payload)).data,

@@ -117,3 +117,46 @@ def test_import_equal_weight_fallback_when_no_prices_or_weights(client):
 def test_import_rejects_unreadable_file(client):
     r = _upload(client, "no,useful,columns\n1,2,3\n")
     assert r.status_code == 400
+
+
+# ------------------------------------------------ parse (preview) + commit
+
+def test_parse_returns_preview_without_writing(client):
+    csv = "Symbol,Quantity,Cost Basis\nAAA,100,5000\nBBB,100,5000\n"
+    prices = {"AAA": [{"date": "2026-01-01", "price": 200.0}],
+              "BBB": [{"date": "2026-01-01", "price": 50.0}]}
+    import app.main as m
+    before = len(client.get("/portfolios", headers={"X-User-Id": "1"}).json())
+    with patch.object(m, "get_price_series_cached", side_effect=lambda t, **k: prices.get(t.upper(), [])):
+        r = client.post("/portfolios/import/parse",
+                        files={"file": ("h.csv", csv, "text/csv")}, headers={"X-User-Id": "1"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["report"]["weight_basis"] == "market_value"
+    w = {h["ticker"]: h["weight"] for h in body["holdings"]}
+    assert w["AAA"] == pytest.approx(0.8, abs=0.01)
+    # nothing was created
+    after = len(client.get("/portfolios", headers={"X-User-Id": "1"}).json())
+    assert after == before
+
+
+def test_commit_honors_user_edited_weights(client):
+    # User edited the previewed holdings (changed weights + a quantity).
+    payload = {"name": "Edited Import", "holdings": [
+        {"ticker": "AAA", "quantity": 120, "cost_basis": 6000, "weight": 0.7,
+         "purchase_date": "2023-01-15", "asset_type": "EQUITY"},
+        {"ticker": "BBB", "quantity": 100, "cost_basis": 5000, "weight": 0.3},
+    ]}
+    r = client.post("/portfolios/import/commit", json=payload, headers={"X-User-Id": "1"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["import_report"]["weight_basis"] == "user_adjusted"
+    a = {x["ticker"]: x for x in body["assets"]}
+    assert a["AAA"]["weight"] == pytest.approx(0.7, abs=0.01)
+    assert a["AAA"]["quantity"] == 120 and a["AAA"]["cost_basis"] == 6000
+
+
+def test_commit_rejects_empty(client):
+    r = client.post("/portfolios/import/commit", json={"name": "x", "holdings": []},
+                    headers={"X-User-Id": "1"})
+    assert r.status_code == 400

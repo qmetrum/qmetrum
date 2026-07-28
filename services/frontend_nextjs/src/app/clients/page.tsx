@@ -8,6 +8,7 @@ import {
   portfolioApi,
   portfolioListApi,
   type PortfolioResponse,
+  type ImportHolding,
 } from "@/lib/api";
 
 type NewPortfolio = {
@@ -56,23 +57,34 @@ export default function ClientsPage() {
   });
 
   const fileRef = useRef<HTMLInputElement>(null);
-  const [importResult, setImportResult] = useState<
-    { name: string; count: number; basis: string; warnings: string[]; skipped: number } | null
+  // Two-step import: parse a CSV into an editable preview, then commit.
+  const [importName, setImportName] = useState("");
+  const [preview, setPreview] = useState<ImportHolding[] | null>(null);
+  const [previewReport, setPreviewReport] = useState<
+    { warnings: string[]; skipped: { row: number; reason: string }[]; weight_basis: string } | null
   >(null);
-  const importMutation = useMutation({
-    mutationFn: (file: File) => portfolioApi.importCsv(file),
+  const [importResult, setImportResult] = useState<
+    { name: string; count: number; basis: string } | null
+  >(null);
+
+  const parseMutation = useMutation({
+    mutationFn: (file: File) => portfolioApi.importParse(file),
     onSuccess: (res) => {
-      qc.invalidateQueries({ queryKey: ["portfolios-list"] });
-      setImportResult({
-        name: res.name,
-        count: res.import_report.imported,
-        basis: res.import_report.weight_basis,
-        warnings: res.import_report.warnings ?? [],
-        skipped: (res.import_report.skipped ?? []).length,
-      });
+      setPreview(res.holdings);
+      setPreviewReport(res.report);
+      setImportName(`Imported ${new Date().toISOString().slice(0, 10)}`);
     },
   });
-  const importErr = importMutation.error as
+  const commitMutation = useMutation({
+    mutationFn: () => portfolioApi.importCommit(importName.trim(), preview ?? []),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["portfolios-list"] });
+      setImportResult({ name: res.name, count: res.import_report.imported, basis: res.import_report.weight_basis });
+      setPreview(null);
+      setPreviewReport(null);
+    },
+  });
+  const importErr = (parseMutation.error || commitMutation.error) as
     | { response?: { data?: { detail?: string } }; message?: string }
     | null;
   const importErrorMsg = importErr
@@ -83,9 +95,23 @@ export default function ClientsPage() {
     const f = e.target.files?.[0];
     if (f) {
       setImportResult(null);
-      importMutation.mutate(f);
+      parseMutation.mutate(f);
     }
     e.target.value = ""; // allow re-importing the same filename
+  }
+
+  function editHolding(i: number, field: keyof ImportHolding, val: string) {
+    if (!preview) return;
+    const next = [...preview];
+    if (field === "ticker") next[i] = { ...next[i], ticker: val.toUpperCase() };
+    else if (field === "purchase_date" || field === "asset_type") next[i] = { ...next[i], [field]: val };
+    else if (field === "weight") next[i] = { ...next[i], weight: (parseFloat(val) || 0) / 100 }; // input is %
+    else next[i] = { ...next[i], [field]: parseFloat(val) || 0 };
+    setPreview(next);
+  }
+  const previewTotalWeight = (preview ?? []).reduce((a, h) => a + (h.weight || 0), 0);
+  function removeHolding(i: number) {
+    if (preview) setPreview(preview.filter((_, j) => j !== i));
   }
 
   function addAssetRow() {
@@ -120,11 +146,11 @@ export default function ClientsPage() {
           />
           <button
             onClick={() => fileRef.current?.click()}
-            disabled={importMutation.isPending}
+            disabled={parseMutation.isPending}
             className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--content-bg)] disabled:opacity-50 transition-colors"
             title="Import real holdings from a custodian or brokerage CSV export"
           >
-            {importMutation.isPending ? "Importing…" : "Import holdings (CSV)"}
+            {parseMutation.isPending ? "Reading…" : "Import holdings (CSV)"}
           </button>
           <button
             onClick={() => setShowCreate(!showCreate)}
@@ -146,15 +172,101 @@ export default function ClientsPage() {
           <span className="font-semibold">{importResult.name}</span>
           {importResult.basis === "market_value"
             ? " (weights from live market value)"
-            : importResult.basis === "supplied_weight"
-              ? " (weights from the file)"
-              : " (equal-weighted — add quantities to get real weights)"}
-          {importResult.skipped > 0 && ` · ${importResult.skipped} row(s) skipped`}
-          {importResult.warnings.length > 0 && (
-            <span className="block text-xs text-[var(--text-muted)] mt-0.5">
-              {importResult.warnings.join(" ")}
+            : importResult.basis === "user_adjusted"
+              ? " (weights as you set them)"
+              : importResult.basis === "supplied_weight"
+                ? " (weights from the file)"
+                : " (equal-weighted)"}
+        </div>
+      )}
+
+      {/* Import preview — edit the parsed holdings before saving */}
+      {preview && (
+        <div className="q-card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-[var(--text-primary)]">
+              Review imported holdings ({preview.length})
+            </h2>
+            <span className="text-[11px] text-[var(--text-muted)]">
+              weights total {(previewTotalWeight * 100).toFixed(0)}%
+              {Math.abs(previewTotalWeight - 1) > 0.02 && " (normalized on save)"}
             </span>
+          </div>
+          {previewReport && (previewReport.warnings.length > 0 || previewReport.skipped.length > 0) && (
+            <p className="text-[11px] text-[var(--text-muted)]">
+              {previewReport.warnings.join(" ")}
+              {previewReport.skipped.length > 0 &&
+                ` ${previewReport.skipped.length} row(s) skipped: ` +
+                  previewReport.skipped.slice(0, 3).map((s) => s.reason).join("; ")}
+            </p>
           )}
+          <div>
+            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Portfolio name</label>
+            <input
+              value={importName}
+              onChange={(e) => setImportName(e.target.value)}
+              className="w-full max-w-sm rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--teal)]"
+            />
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-[var(--text-muted)]">
+                  <th className="py-1 pr-2 font-semibold">Ticker</th>
+                  <th className="py-1 px-2 font-semibold">Quantity</th>
+                  <th className="py-1 px-2 font-semibold">Cost basis ($)</th>
+                  <th className="py-1 px-2 font-semibold">Purchase date</th>
+                  <th className="py-1 px-2 font-semibold">Weight (%)</th>
+                  <th className="py-1 pl-2"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.map((h, i) => (
+                  <tr key={i} className="border-t border-[var(--border)]">
+                    {([
+                      ["ticker", h.ticker, "w-20"],
+                      ["quantity", String(h.quantity ?? ""), "w-24"],
+                      ["cost_basis", String(h.cost_basis ?? ""), "w-28"],
+                      ["purchase_date", h.purchase_date ?? "", "w-32"],
+                      ["weight", (h.weight * 100).toFixed(1), "w-20"],
+                    ] as const).map(([field, val, w]) => (
+                      <td key={field} className="py-1 pr-2">
+                        <input
+                          value={val}
+                          onChange={(e) => editHolding(i, field as keyof ImportHolding, e.target.value)}
+                          className={`${w} rounded border border-[var(--border)] bg-white px-2 py-1 text-xs outline-none focus:border-[var(--teal)]`}
+                        />
+                      </td>
+                    ))}
+                    <td className="py-1 pl-2">
+                      <button
+                        onClick={() => removeHolding(i)}
+                        className="text-[var(--text-muted)] hover:text-[var(--coral)]"
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={() => commitMutation.mutate()}
+              disabled={commitMutation.isPending || preview.length === 0 || !importName.trim()}
+              className="rounded-lg bg-[var(--teal)] px-5 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            >
+              {commitMutation.isPending ? "Saving…" : `Import ${preview.length} holdings`}
+            </button>
+            <button
+              onClick={() => { setPreview(null); setPreviewReport(null); }}
+              className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--content-bg)] transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 

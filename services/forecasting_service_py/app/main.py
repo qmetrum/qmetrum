@@ -2905,6 +2905,129 @@ def create_portfolio(
         return _portfolio_to_dict(portfolio, positions, session=session)
 
 
+async def _read_upload_csv(file: UploadFile) -> str:
+    raw = await file.read()
+    if len(raw) > 5_000_000:
+        raise HTTPException(status_code=400, detail="File too large (max 5 MB).")
+    try:
+        return raw.decode("utf-8-sig")  # tolerate a BOM
+    except UnicodeDecodeError:
+        return raw.decode("latin-1", errors="replace")
+
+
+def _derive_import_weights(holdings: List[dict]) -> tuple:
+    """(weights, basis): market value (quantity x live price) preferred, then a
+    supplied weight, then equal weight. Never invents a value."""
+    mvs: List[Optional[float]] = []
+    for h in holdings:
+        mv = None
+        if h.get("quantity"):
+            series = get_price_series_cached(str(h["ticker"]))
+            if series:
+                mv = float(h["quantity"]) * float(series[-1]["price"])
+        if mv is None:
+            mv = h.get("_market_value")
+        mvs.append(mv)
+    total_mv = sum(v for v in mvs if v)
+    if total_mv and total_mv > 0:
+        return [(v / total_mv) if v else 0.0 for v in mvs], "market_value"
+    raw_w = [h.get("_weight") for h in holdings]
+    present = [w for w in raw_w if w is not None]
+    if present:
+        scale = 0.01 if sum(present) > 2.0 else 1.0  # percents vs fractions
+        tot = sum(w * scale for w in present) or 1.0
+        return [((w * scale / tot) if w is not None else 0.0) for w in raw_w], "supplied_weight"
+    n = len(holdings) or 1
+    return [1.0 / n] * len(holdings), "equal_weight"
+
+
+def _create_portfolio_from_holdings(session, user, name, holdings, weights) -> dict:
+    now = datetime.utcnow()
+    pname = (name or "").strip() or f"Imported {now.strftime('%Y-%m-%d')}"
+    portfolio = Portfolio(user_id=user.id, name=pname, created_at=now, updated_at=now)
+    session.add(portfolio)
+    session.commit()
+    session.refresh(portfolio)
+    for h, w in zip(holdings, weights):
+        ticker = str(h["ticker"]).strip().upper()
+        _ensure_asset(session, ticker)
+        pdate = None
+        if h.get("purchase_date"):
+            try:
+                pdate = datetime.fromisoformat(str(h["purchase_date"])[:19])
+            except (ValueError, TypeError):
+                pdate = None
+        session.add(Position(
+            portfolio_id=portfolio.id,
+            ticker=ticker,
+            weight=float(w),
+            quantity=float(h.get("quantity") or 0.0),
+            cost_basis=float(h.get("cost_basis") or 0.0),
+            purchase_date=pdate,
+            asset_type=(h.get("asset_type") or "EQUITY"),
+        ))
+    session.commit()
+    positions = session.exec(
+        select(Position).where(Position.portfolio_id == portfolio.id)
+    ).all()
+    return _portfolio_to_dict(portfolio, positions, session=session)
+
+
+@app.post("/portfolios/import/parse")
+async def parse_import(file: UploadFile = File(...)):
+    """Parse a holdings CSV and return normalized, weight-derived holdings for
+    PREVIEW/editing. Does not write anything."""
+    from app.services.holdings_import import parse_holdings_csv
+    parsed = parse_holdings_csv(await _read_upload_csv(file))
+    holdings = parsed["holdings"]
+    if not holdings:
+        raise HTTPException(status_code=400,
+                            detail="No holdings could be read. " + " ".join(parsed.get("warnings", [])))
+    weights, basis = _derive_import_weights(holdings)
+    preview = [{
+        "ticker": h["ticker"],
+        "quantity": h.get("quantity") or 0.0,
+        "cost_basis": h.get("cost_basis") or 0.0,
+        "purchase_date": h.get("purchase_date"),
+        "asset_type": h.get("asset_type") or "EQUITY",
+        "weight": round(float(w), 4),
+    } for h, w in zip(holdings, weights)]
+    return {"holdings": preview, "report": {
+        "imported": len(holdings), "skipped": parsed.get("skipped", []),
+        "warnings": parsed.get("warnings", []), "weight_basis": basis,
+        "columns_detected": parsed.get("columns", {})}}
+
+
+class ImportCommitRequest(BaseModel):
+    name: Optional[str] = None
+    holdings: List[dict]
+
+
+@app.post("/portfolios/import/commit")
+def commit_import(
+    payload: ImportCommitRequest,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Create a portfolio from the (possibly user-edited) previewed holdings.
+    Honors edited weights if supplied; otherwise re-derives them."""
+    holdings = [h for h in (payload.holdings or []) if str(h.get("ticker") or "").strip()]
+    if not holdings:
+        raise HTTPException(status_code=400, detail="No holdings to import.")
+    provided = [h.get("weight") for h in holdings]
+    if any(w is not None for w in provided):
+        vals = [float(w) if w is not None else 0.0 for w in provided]
+        tot = sum(v for v in vals if v > 0) or 1.0
+        weights, basis = [v / tot for v in vals], "user_adjusted"
+    else:
+        weights, basis = _derive_import_weights(holdings)
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        result = _create_portfolio_from_holdings(session, user, payload.name, holdings, weights)
+    result["import_report"] = {"imported": len(holdings), "weight_basis": basis}
+    return result
+
+
 @app.post("/portfolios/import")
 async def import_portfolio(
     file: UploadFile = File(...),
@@ -2912,97 +3035,23 @@ async def import_portfolio(
     user_id: Optional[int] = None,
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
-    """Import real holdings from a custodian/brokerage CSV export into a new
-    portfolio. Flexible about column names; derives real market-value weights
-    from live prices (falling back to a supplied weight column, then equal
-    weight) and preserves quantity, cost basis, and purchase date so $ P&L
-    works. Returns the created portfolio plus a parse report."""
+    """One-shot: parse a custodian/brokerage CSV and create the portfolio
+    directly (no preview). Returns the created portfolio plus a parse report."""
     from app.services.holdings_import import parse_holdings_csv
-
-    raw = await file.read()
-    if len(raw) > 5_000_000:
-        raise HTTPException(status_code=400, detail="File too large (max 5 MB).")
-    try:
-        text = raw.decode("utf-8-sig")  # tolerate a BOM
-    except UnicodeDecodeError:
-        text = raw.decode("latin-1", errors="replace")
-
-    parsed = parse_holdings_csv(text)
+    parsed = parse_holdings_csv(await _read_upload_csv(file))
     holdings = parsed["holdings"]
     if not holdings:
-        raise HTTPException(
-            status_code=400,
-            detail="No holdings could be read. " + " ".join(parsed.get("warnings", [])),
-        )
-
-    # Derive real weights: prefer market value (quantity x live price), then a
-    # supplied market-value or weight column, then equal weight. Never invent.
-    mvs: List[Optional[float]] = []
-    for h in holdings:
-        mv = None
-        if h["quantity"]:
-            series = get_price_series_cached(h["ticker"])
-            if series:
-                mv = float(h["quantity"]) * float(series[-1]["price"])
-        if mv is None:
-            mv = h.get("_market_value")
-        mvs.append(mv)
-
-    total_mv = sum(v for v in mvs if v)
-    weights: List[float]
-    weight_basis: str
-    if total_mv and total_mv > 0:
-        weights = [(v / total_mv) if v else 0.0 for v in mvs]
-        weight_basis = "market_value"
-    else:
-        raw_w = [h.get("_weight") for h in holdings]
-        present = [w for w in raw_w if w is not None]
-        if present:
-            scale = 0.01 if sum(present) > 2.0 else 1.0  # percents vs fractions
-            tot = sum(w * scale for w in present) or 1.0
-            weights = [((w * scale / tot) if w is not None else 0.0) for w in raw_w]
-            weight_basis = "supplied_weight"
-        else:
-            weights = [1.0 / len(holdings)] * len(holdings)
-            weight_basis = "equal_weight"
-
-    now = datetime.utcnow()
-    pname = (name or "").strip() or f"Imported {now.strftime('%Y-%m-%d')}"
+        raise HTTPException(status_code=400,
+                            detail="No holdings could be read. " + " ".join(parsed.get("warnings", [])))
+    weights, basis = _derive_import_weights(holdings)
     with Session(engine) as session:
         user = _require_user(session, user_id, x_user_id)
-        portfolio = Portfolio(user_id=user.id, name=pname, created_at=now, updated_at=now)
-        session.add(portfolio)
-        session.commit()
-        session.refresh(portfolio)
-
-        for h, w in zip(holdings, weights):
-            _ensure_asset(session, h["ticker"])
-            pdate = None
-            if h.get("purchase_date"):
-                try:
-                    pdate = datetime.fromisoformat(h["purchase_date"])
-                except (ValueError, TypeError):
-                    pdate = None
-            session.add(Position(
-                portfolio_id=portfolio.id,
-                ticker=h["ticker"],
-                weight=float(w),
-                quantity=float(h.get("quantity") or 0.0),
-                cost_basis=float(h.get("cost_basis") or 0.0),
-                purchase_date=pdate,
-                asset_type=h.get("asset_type") or "EQUITY",
-            ))
-        session.commit()
-        positions = session.exec(
-            select(Position).where(Position.portfolio_id == portfolio.id)
-        ).all()
-        result = _portfolio_to_dict(portfolio, positions, session=session)
-
+        result = _create_portfolio_from_holdings(session, user, name, holdings, weights)
     result["import_report"] = {
         "imported": len(holdings),
         "skipped": parsed.get("skipped", []),
         "warnings": parsed.get("warnings", []),
-        "weight_basis": weight_basis,
+        "weight_basis": basis,
         "columns_detected": parsed.get("columns", {}),
     }
     return result
