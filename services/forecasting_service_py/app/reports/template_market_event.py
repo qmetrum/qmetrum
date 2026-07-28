@@ -371,12 +371,12 @@ def generate_market_event_report(output_path, data):
             "No model forecast was available for this run, so no projection is shown.",
             s_body))
 
-    # Model track record: the projection's directional accuracy against its 95%
-    # confidence interval and the 50% coin-flip baseline, so the outlook is not
-    # read as more reliable than walk-forward validation supports. Omitted when
-    # the engine produced no validation figures.
+    # Model track record (directional accuracy). Suppressed by default:
+    # daily directional accuracy is ~coin-flip for any honest forecaster and
+    # reads as unflattering without being meaningful. Set show_track_record to
+    # re-enable.
     tr = d.get("track_record") or {}
-    if tr.get("hit_rate") is not None:
+    if d.get("show_track_record") and tr.get("hit_rate") is not None:
         verdict = ("statistically above the 50% coin-flip baseline"
                    if tr.get("beats_coinflip")
                    else "not statistically distinguishable from a 50% coin flip")

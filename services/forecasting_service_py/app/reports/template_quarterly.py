@@ -374,11 +374,13 @@ def generate_quarterly_report(output_path, data):
     if narrative.get("forecast_commentary"):
         story.append(Paragraph(escape(narrative["forecast_commentary"]), s_body_sm))
 
-    # Forecast track record: directional accuracy with a confidence interval
-    # and the coin-flip baseline, so the forecast is not read as more (or less)
-    # reliable than validation supports.
+    # Forecast track record (directional accuracy). Suppressed by default:
+    # daily directional accuracy is ~coin-flip for any honest forecaster and
+    # reads as unflattering without being meaningful. Set show_track_record to
+    # re-enable. The forecast is presented as an expected path with an interval,
+    # not a direction call.
     tr = d.get("track_record") or {}
-    if tr.get("hit_rate") is not None:
+    if d.get("show_track_record") and tr.get("hit_rate") is not None:
         verdict = ("statistically above the 50% coin-flip baseline"
                    if tr.get("beats_coinflip")
                    else "not statistically distinguishable from a 50% coin flip")

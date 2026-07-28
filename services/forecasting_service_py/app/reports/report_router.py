@@ -1063,7 +1063,7 @@ def generate_quarterly(
     except Exception as e:
         logger.warning(f"Risk attribution failed: {e}"); risk_attr = None
     try:
-        track_record = _forecast_track_record(data)
+        track_record = None  # directional track-record suppressed product-wide; re-enable by calling _forecast_track_record(data) + templates' show_track_record
     except Exception as e:
         logger.warning(f"Forecast track record failed: {e}"); track_record = None
 
@@ -1399,7 +1399,7 @@ def generate_event_report(
     # as more reliable than walk-forward validation actually supports. None when
     # the engine produced no validation figures.
     try:
-        track_record = _forecast_track_record(data)
+        track_record = None  # directional track-record suppressed product-wide; re-enable by calling _forecast_track_record(data) + templates' show_track_record
     except Exception as e:
         logger.warning(f"Market event forecast track record failed: {e}")
         track_record = None
@@ -1732,7 +1732,7 @@ def generate_year_end(
     except Exception as e:
         logger.warning(f"Year-end risk attribution failed: {e}"); risk_attr = None
     try:
-        track_record = _forecast_track_record(data)
+        track_record = None  # directional track-record suppressed product-wide; re-enable by calling _forecast_track_record(data) + templates' show_track_record
     except Exception as e:
         logger.warning(f"Year-end track record failed: {e}"); track_record = None
 

@@ -463,11 +463,12 @@ def generate_yearend_report(output_path, data):
         if narrative.get("model_commentary"):
             story.append(Paragraph(escape(narrative["model_commentary"]), s_body_sm))
 
-        # Model track record: the same directional accuracy placed against its
-        # 95% confidence interval and the 50% coin-flip baseline, so a hit rate
-        # near 50% is not read as a reliable edge (nor a real edge dismissed).
+        # Model track record (directional accuracy). Suppressed by default:
+        # daily directional accuracy is ~coin-flip for any honest forecaster and
+        # reads as unflattering without being meaningful. Set show_track_record
+        # to re-enable.
         tr = d.get("track_record") or {}
-        if tr.get("hit_rate") is not None:
+        if d.get("show_track_record") and tr.get("hit_rate") is not None:
             verdict = ("statistically above the 50% coin-flip baseline"
                        if tr.get("beats_coinflip")
                        else "not statistically distinguishable from a 50% coin flip")
