@@ -206,7 +206,7 @@ def run(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
 
 REBALANCING_SYSTEM_PROMPT = """You are a buy-side risk analyst writing the narrative layer of a portfolio rebalancing proposal for a financial advisor. You are given ONLY real computed facts: the current allocation's risk metrics, the proposed allocation's risk metrics, the exact metric changes, and the trade list that moves one to the other. Write:
 
-- proposal_summary: 3-5 sentences. What the proposal changes at the allocation level, what it does to the risk profile (volatility, drawdown, VaR, Sharpe, Sortino), and the single most important trade-off. Report the ACTUAL direction of every change: when a metric worsens under the proposal, say so plainly.
+- proposal_summary: 3-5 sentences. What the proposal changes at the allocation level, what it does to the risk profile (volatility, drawdown, VaR, Sharpe, Sortino), and the single most important trade-off. Report the ACTUAL direction of every change: when a metric worsens under the proposal, say so plainly. If a risk-contribution decomposition for the CURRENT allocation is supplied, name the holding that contributes the MOST to the current book's volatility and note where its risk share diverges from its weight (a small position can carry outsized risk); when the PROPOSED allocation's decomposition is also supplied, say how the proposal shifts that concentration. Cite the risk-share numbers, do not merely assert dominance.
 - trade_commentary: 2-4 sentences on the trade set: where money moves from and to, which trades dominate by dollar value, and what the shift means for concentration.
 - considerations: 2-5 short bullets. Points the advisor could evaluate before executing, each tied to a specific number in the facts (for example a metric that moves the wrong way, one trade dominating the dollar flow, or execution friction on the amounts shown). Phrase each as an option to evaluate, never an instruction.
 
@@ -261,6 +261,22 @@ def build_rebalancing_prompt(facts: dict[str, Any]) -> str:
         f"  Sharpe {_delta('sharpe', scale=1.0, suffix='')}, "
         f"Sortino {_delta('sortino', scale=1.0, suffix='')}",
     ]
+    ra = facts.get("risk_attribution") or {}
+    if ra.get("rows"):
+        lines += ["", f"Risk contribution by holding, CURRENT allocation (annualized "
+                      f"volatility {ra['portfolio_vol'] * 100:.1f}%, {ra.get('n_obs', 0)} obs; "
+                      f"risk share vs weight, sorted by risk share):"]
+        for r in ra["rows"][:8]:
+            lines.append(f"  {r['ticker']}: weight {r['weight'] * 100:.0f}%, "
+                         f"risk share {r['risk_pct'] * 100:.0f}%")
+    pra = facts.get("proposed_risk_attribution") or {}
+    if pra.get("rows"):
+        lines += ["", f"Risk contribution by holding, PROPOSED allocation (annualized "
+                      f"volatility {pra['portfolio_vol'] * 100:.1f}%, {pra.get('n_obs', 0)} obs; "
+                      f"risk share vs weight):"]
+        for r in pra["rows"][:8]:
+            lines.append(f"  {r['ticker']}: weight {r['weight'] * 100:.0f}%, "
+                         f"risk share {r['risk_pct'] * 100:.0f}%")
     trades = facts.get("trades") or []
     if trades:
         lines += ["", "Trades (dollar values at the stated portfolio value):"]
@@ -292,6 +308,8 @@ def run_rebalancing(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult
     prompt = build_rebalancing_prompt(facts)
     cm = facts.get("current_metrics") or {}
     pm = facts.get("proposed_metrics") or {}
+    ra = facts.get("risk_attribution") or {}
+    pra = facts.get("proposed_risk_attribution") or {}
     result = generate(
         prompt,
         agent_name="rebalancing_narrator",
@@ -303,6 +321,10 @@ def run_rebalancing(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult
             "proposed_vol": round(float(pm.get("annualized_vol") or 0), 4),
             "current_sharpe": round(float(cm.get("sharpe") or 0), 3),
             "proposed_sharpe": round(float(pm.get("sharpe") or 0), 3),
+            "risk_share_top": (round(float(ra["rows"][0]["risk_pct"]), 3)
+                               if ra.get("rows") else None),
+            "proposed_risk_share_top": (round(float(pra["rows"][0]["risk_pct"]), 3)
+                                        if pra.get("rows") else None),
             "trades": [
                 {"t": t.get("ticker"), "a": t.get("action"),
                  "w": round(float(t.get("to_weight") or 0), 4)}
@@ -341,6 +363,7 @@ MARKET_EVENT_SYSTEM_PROMPT = """You are a buy-side risk analyst writing the narr
 
 - event_commentary: 3-5 sentences. What happened to THIS portfolio through the event window: the move since the last close before the event, how deep the peak drawdown went, and which holdings drove or cushioned the result. Use dollar terms via the portfolio value where it helps.
 - benchmark_commentary: 2-3 sentences comparing the portfolio's event-window move and drawdown against the benchmark figures supplied. Empty string if no benchmark facts are supplied.
+- risk_synthesis: 2-4 sentences (only if a risk reconciliation is supplied, else empty string). Tie the event-window move together with the portfolio's standing downside measures on ONE common dollar basis: the 1-day VaR, the realized maximum drawdown, and the forecast downside where supplied. State them in dollars for this portfolio, say which is the most severe, and put the event impact in that context (for example whether this event stayed within or exceeded the portfolio's realized maximum drawdown already seen). If a consistency flag is supplied, surface it plainly.
 - outlook: 2-4 sentences grounded ONLY in the supplied forecast and regime facts: what the model's median path implies over the stated horizon in return terms, what the interval width says about confidence, and what the regime and fragility score mean for reliability. If no forecast facts are supplied, say that a model forecast is not available for this run and describe only the regime and fragility facts.
 - considerations: 2-5 short bullets. Possible moves the advisor could evaluate, each tied to a specific number in the facts (for example a holding whose event return dominated the loss, a fragility score near the 1.5 threshold, or a wide forecast interval). Phrase each as an option to evaluate, never an instruction.
 
@@ -352,13 +375,14 @@ Rules:
 - These are model-derived observations for a professional to evaluate, not advice. No promises, no certainty language.
 - NEVER use em dashes or en dashes anywhere in the text. Use commas, colons, or periods instead.
 
-Return JSON with exactly those four fields.
+Return JSON with exactly those five fields (risk_synthesis included).
 """
 
 
 class MarketEventNarrative(BaseModel):
     event_commentary: str
     benchmark_commentary: str
+    risk_synthesis: str = ""
     outlook: str
     considerations: list[str]
 
@@ -393,6 +417,24 @@ def build_market_event_prompt(facts: dict[str, Any]) -> str:
         f"{float(risk.get('fragility_score') or 0):.2f} "
         "(current vol / long-term median vol; above 1.5 is flagged fragile)",
     ]
+    rr = facts.get("risk_reconciliation") or {}
+    if (rr.get("var_1d_dollars") is not None
+            or rr.get("max_drawdown_dollars") is not None
+            or rr.get("worst_scenario_dollars") is not None):
+        lines += ["", "Downside on one basis (dollars for this portfolio), to place "
+                      "alongside the event-window move above:"]
+        if rr.get("var_1d_dollars") is not None:
+            lines.append(f"  1-day VaR95: {_fmt_money(rr['var_1d_dollars'])} ({_pct(rr.get('var_1d_pct'))})")
+        ws = rr.get("worst_scenario") or {}
+        if rr.get("worst_scenario_dollars") is not None:
+            lines.append(f"  worst simulated scenario ({ws.get('name')}): {_fmt_money(rr['worst_scenario_dollars'])}")
+        if rr.get("max_drawdown_dollars") is not None:
+            lines.append(f"  realized max drawdown: {_fmt_money(rr['max_drawdown_dollars'])} ({_pct(rr.get('max_drawdown_pct'))})")
+        if rr.get("forecast_downside_dollars") is not None:
+            lines.append(f"  forecast downside (low end): {_fmt_money(rr['forecast_downside_dollars'])}")
+        lines.append(f"  fragility reading: {rr.get('fragility_label', 'n/a')}")
+        for fl in rr.get("flags", []):
+            lines.append(f"  CONSISTENCY FLAG: {fl}")
     fc = facts.get("forecast") or {}
     if fc.get("return_pct") is not None:
         lines += [
@@ -424,6 +466,7 @@ def run_market_event(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResul
     port = facts.get("portfolio") or {}
     bench = facts.get("benchmark") or {}
     fc = facts.get("forecast") or {}
+    rr = facts.get("risk_reconciliation") or {}
     result = generate(
         prompt,
         agent_name="market_event_narrator",
@@ -440,6 +483,8 @@ def run_market_event(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResul
             "fragility": round(float((facts.get("risk") or {}).get("fragility_score") or 0), 2),
             "forecast_return": (round(float(fc["return_pct"]), 2)
                                 if fc.get("return_pct") is not None else None),
+            "recon_maxdd": (round(float(rr.get("max_drawdown_pct")), 4)
+                            if rr.get("max_drawdown_pct") is not None else None),
         },
     )
     try:
@@ -450,7 +495,7 @@ def run_market_event(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResul
         raise ValueError("market event narrator returned malformed JSON: not an object")
     out = {
         k: _strip_dashes(str(parsed.get(k) or ""))
-        for k in ("event_commentary", "benchmark_commentary", "outlook")
+        for k in ("event_commentary", "benchmark_commentary", "risk_synthesis", "outlook")
     }
     out["considerations"] = [
         _strip_dashes(str(c)) for c in (parsed.get("considerations") or []) if str(c).strip()
@@ -468,8 +513,8 @@ def run_market_event(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResul
 YEAREND_SYSTEM_PROMPT = """You are a buy-side risk analyst writing the narrative layer of a year-end portfolio review for a financial advisor's client. You are given ONLY real computed facts about one portfolio's review period: monthly returns for the months with price data, the total return over those months, optionally a benchmark's return over the same months, risk metrics computed over the engine's stated analysis window, the monthly volatility and fragility paths, the current regime, optionally the engine's walk-forward model validation figures, and the top and bottom contributors. Write:
 
 - year_summary: 3-5 sentences. How the review period actually went: the total return over the covered months (against the benchmark when benchmark facts are supplied), which months drove or hurt the result, and what the contributor figures show about where the return came from. Use dollar terms via the supplied portfolio values where it helps.
-- risk_commentary: 2-4 sentences. What the monthly volatility and fragility paths show about how risk evolved through the period, and what the stated risk metrics say. Name the window the risk metrics were computed over exactly as supplied; never present them as calendar-year statistics.
-- model_commentary: 2-3 sentences, ONLY when model validation facts are supplied: what the directional accuracy and mean absolute forecast error from walk-forward validation say about how reliable the engine's forecasts have been, including the number of validation points. Empty string when no model validation facts are supplied.
+- risk_commentary: 2-4 sentences. What the monthly volatility and fragility paths show about how risk evolved through the period, and what the stated risk metrics say. Name the window the risk metrics were computed over exactly as supplied; never present them as calendar-year statistics. If a risk-contribution decomposition is supplied, name the holding that contributed the MOST to portfolio volatility over the year and note where its share of risk diverges from its weight (a small position can carry outsized risk); cite the contribution number rather than merely asserting it. If a one-dollar-basis downside reconciliation is supplied, tie the separate measures (1-day VaR, worst simulated scenario, realized maximum drawdown, forecast downside) into one picture in dollars, say which is most severe, and surface any consistency flag plainly.
+- model_commentary: 2-3 sentences, ONLY when model validation facts are supplied: what the directional accuracy and mean absolute forecast error from walk-forward validation say about how reliable the engine's forecasts have been, including the number of validation points. If a directional-accuracy confidence interval is supplied and it includes 50%, say plainly that the measured edge is not statistically distinguishable from a coin flip; do not overstate a hit rate near 50%. Empty string when no model validation facts are supplied.
 - year_ahead: 3-5 sentences of positioning context for the year ahead, grounded ONLY in the supplied current regime, fragility score, and volatility facts: what the current risk state suggests is worth monitoring as the new year starts. Never predict markets, rates, inflation, or events, and never reference asset classes, products, or holdings that are not in the supplied facts.
 - considerations: 2-5 short bullets. Possible moves or topics the advisor could evaluate, each tied to a specific number in the facts (for example a month that dominated the loss, a contributor concentration, a fragility reading near the 1.5 threshold, or a volatility trend). Phrase each as an option to evaluate, never an instruction.
 
@@ -556,6 +601,37 @@ def build_yearend_prompt(facts: dict[str, Any]) -> str:
     else:
         lines += ["", "No model validation facts are available for this run. "
                       "Leave model_commentary empty."]
+    tr = facts.get("track_record") or {}
+    if tr.get("hit_rate") is not None:
+        lines += [
+            "",
+            "Forecast track record with statistical confidence (walk-forward validation):",
+            f"  directional accuracy {tr['hit_rate'] * 100:.0f}% over {tr['n_steps']} steps, "
+            f"95% CI {tr['ci_low'] * 100:.0f}% to {tr['ci_high'] * 100:.0f}%, coin-flip baseline 50%, "
+            f"{'statistically above' if tr.get('beats_coinflip') else 'NOT distinguishable from'} chance",
+        ]
+    ra = facts.get("risk_attribution") or {}
+    if ra.get("rows"):
+        lines += ["", f"Risk contribution by holding (portfolio annualized volatility "
+                      f"{ra['portfolio_vol'] * 100:.1f}%, {ra.get('n_obs', 0)} obs; "
+                      f"risk share vs weight):"]
+        for r in ra["rows"][:8]:
+            lines.append(f"  {r['ticker']}: weight {r['weight'] * 100:.0f}%, "
+                         f"risk share {r['risk_pct'] * 100:.0f}%")
+    rr_ = facts.get("risk_reconciliation") or {}
+    if rr_.get("var_1d_dollars") is not None or rr_.get("worst_scenario_dollars") is not None:
+        lines += ["", "Downside on one basis (dollars for this portfolio):"]
+        if rr_.get("var_1d_dollars") is not None:
+            lines.append(f"  1-day VaR95: {_fmt_money(rr_['var_1d_dollars'])} ({_pct(rr_.get('var_1d_pct'))})")
+        if rr_.get("worst_scenario_dollars") is not None:
+            lines.append(f"  worst simulated scenario ({(rr_.get('worst_scenario') or {}).get('name')}): {_fmt_money(rr_['worst_scenario_dollars'])}")
+        if rr_.get("max_drawdown_dollars") is not None:
+            lines.append(f"  realized max drawdown: {_fmt_money(rr_['max_drawdown_dollars'])} ({_pct(rr_.get('max_drawdown_pct'))})")
+        if rr_.get("forecast_downside_dollars") is not None:
+            lines.append(f"  forecast downside (low end): {_fmt_money(rr_['forecast_downside_dollars'])}")
+        lines.append(f"  fragility reading: {rr_.get('fragility_label', 'n/a')}")
+        for fl in rr_.get("flags", []):
+            lines.append(f"  CONSISTENCY FLAG: {fl}")
     for label, key in (("Top contributors", "top_contributors"),
                        ("Bottom contributors", "bottom_contributors")):
         rows = facts.get(key) or []
@@ -575,6 +651,9 @@ def run_yearend(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
     rm = facts.get("risk_metrics") or {}
     bench = facts.get("benchmark") or {}
     ma = facts.get("model_accuracy") or {}
+    ra = facts.get("risk_attribution") or {}
+    tr = facts.get("track_record") or {}
+    rr_ = facts.get("risk_reconciliation") or {}
     result = generate(
         prompt,
         agent_name="yearend_narrator",
@@ -589,6 +668,12 @@ def run_yearend(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
             "fragility": round(float(rm.get("fragility_score") or 0), 2),
             "hit_rate": (round(float(ma["hit_rate"]), 3)
                          if ma.get("hit_rate") is not None else None),
+            "risk_share_top": (round(float(ra["rows"][0]["risk_pct"]), 3)
+                               if ra.get("rows") else None),
+            "track_ci_low": (round(float(tr["ci_low"]), 3)
+                             if tr.get("ci_low") is not None else None),
+            "recon_worst": (round(float((rr_.get("worst_scenario") or {}).get("return_pct") or 0), 2)
+                            if rr_.get("worst_scenario") else None),
             "contributors": [
                 h.get("ticker")
                 for h in (facts.get("top_contributors") or [])
@@ -621,7 +706,7 @@ def run_yearend(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
 ONBOARDING_SYSTEM_PROMPT = """You are a buy-side risk analyst writing the narrative layer of a new client risk assessment (onboarding) report for a financial advisor. You are given ONLY real computed facts about one portfolio: its measured risk metrics from its own price history, the client's stated risk tolerance and target annualized volatility, the computed gap between actual and target volatility, the current allocation by asset type, and the holdings. Write:
 
 - risk_profile_summary: 3-5 sentences. Describe the portfolio's risk profile in plain terms and compare it against the client's stated risk tolerance and target volatility: state the actual volatility, the target, and the gap in percentage points, and say plainly whether the portfolio is running hotter than, cooler than, or in line with the stated tolerance. Use dollar terms via the portfolio value where it helps, for example what the historical maximum drawdown would have meant in dollars.
-- what_to_watch: 2-4 sentences. The specific numbers worth monitoring as the relationship starts, each grounded in a supplied figure: for example the volatility gap, a position whose weight dominates the portfolio, the historical drawdown depth, a low Sharpe ratio, or a fragility score near the flagged threshold.
+- what_to_watch: 2-4 sentences. The specific numbers worth monitoring as the relationship starts, each grounded in a supplied figure: for example the volatility gap, a position whose weight dominates the portfolio, the historical drawdown depth, a low Sharpe ratio, or a fragility score near the flagged threshold. If a risk-contribution decomposition is supplied, name the holding that contributes the MOST to the portfolio's volatility and note where its share of risk diverges from its weight (a small, volatile, or highly correlated position can carry a risk share well above its weight); cite the contribution number rather than merely asserting dominance.
 - considerations: 2-5 short bullets. Possible topics or moves the advisor could evaluate with the client, each tied to a specific number in the facts (for example discussing whether the stated target still fits given the measured gap, revisiting a concentrated weight, or reviewing the tolerance banding). Phrase each as an option to evaluate, never an instruction.
 
 Rules:
@@ -669,6 +754,14 @@ def build_onboarding_prompt(facts: dict[str, Any]) -> str:
         lines += ["", "Current allocation by asset type:"]
         for k, v in alloc.items():
             lines.append(f"  {k}: {float(v) * 100:.0f}%")
+    ra = facts.get("risk_attribution") or {}
+    if ra.get("rows"):
+        lines += ["", f"Risk contribution by holding (portfolio annualized volatility "
+                      f"{ra['portfolio_vol'] * 100:.1f}%, {ra.get('n_obs', 0)} obs; "
+                      f"risk share vs weight, sorted by risk share):"]
+        for r in ra["rows"][:8]:
+            lines.append(f"  {r['ticker']}: weight {r['weight'] * 100:.0f}%, "
+                         f"risk share {r['risk_pct'] * 100:.0f}%")
     holds = facts.get("holdings") or []
     if holds:
         lines += ["", "Holdings (ticker, weight, type):"]
@@ -683,6 +776,7 @@ def build_onboarding_prompt(facts: dict[str, Any]) -> str:
 def run_onboarding(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]:
     prompt = build_onboarding_prompt(facts)
     rm = facts.get("risk_metrics") or {}
+    ra = facts.get("risk_attribution") or {}
     result = generate(
         prompt,
         agent_name="onboarding_narrator",
@@ -696,6 +790,8 @@ def run_onboarding(*, facts: dict[str, Any]) -> tuple[dict[str, Any], LlmResult]
             "sharpe": round(float(rm.get("sharpe_ratio") or 0), 3),
             "max_drawdown": round(float(rm.get("max_drawdown") or 0), 4),
             "fragility": round(float(rm.get("fragility_score") or 0), 2),
+            "risk_share_top": (round(float(ra["rows"][0]["risk_pct"]), 3)
+                               if ra.get("rows") else None),
             "holdings": [
                 {"t": h.get("ticker"), "w": round(float(h.get("weight") or 0), 4)}
                 for h in (facts.get("holdings") or [])

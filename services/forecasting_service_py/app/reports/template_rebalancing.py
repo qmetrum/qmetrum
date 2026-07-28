@@ -128,6 +128,14 @@ def generate_rebalancing_report(output_path, data):
         "portfolio_value",
         "current_metrics": {annualized_vol, max_drawdown, var_95, sharpe, sortino},
         "proposed_metrics": {same keys},
+        # Optional: component risk decomposition of the current allocation
+        # (which holding drives the book's risk today, the motivation for
+        # rebalancing). Omitted when None. When "proposed_risk_attribution" is
+        # also present the section renders a current-vs-proposed risk-share
+        # comparison; otherwise it renders the current book only.
+        "risk_attribution": {"portfolio_vol", "n_obs",
+                             "rows": [{"ticker","weight","risk_pct"}]} or None,
+        "proposed_risk_attribution": {same shape} or None,
         "trades": [{"ticker","action","shares" (int or None),"value",
                     "from_weight","to_weight"}],
         # Optional: only rendered when REAL simulated runs exist for BOTH
@@ -223,6 +231,57 @@ def generate_rebalancing_report(output_path, data):
 
     ba_buf = make_before_after_risk(cur_m, prop_m)
     story.append(Image(ba_buf, width=PAGE_WIDTH, height=PAGE_WIDTH * 0.38))
+
+    # Component risk decomposition: which holdings drive the book's risk today
+    # (the motivation for the rebalance). Component risk contributions sum to
+    # the allocation's volatility, so a holding's risk share can exceed its
+    # weight when it is more volatile or more correlated with the rest of the
+    # book. When the proposed allocation's decomposition is also available the
+    # table compares current vs proposed risk shares; otherwise it shows the
+    # current book only. Omitted entirely when there is too little history.
+    cur_ra = d.get("risk_attribution") or {}
+    prop_ra = d.get("proposed_risk_attribution") or {}
+    if cur_ra.get("rows"):
+        story.append(Spacer(1, 10))
+        story.append(Paragraph("What drives the book's risk today", s_subheading))
+        if prop_ra.get("rows"):
+            cur_by_ticker = {r["ticker"]: r for r in cur_ra["rows"]}
+            prop_by_ticker = {r["ticker"]: r for r in prop_ra["rows"]}
+            ordered = [r["ticker"] for r in cur_ra["rows"]]
+            ordered += [r["ticker"] for r in prop_ra["rows"] if r["ticker"] not in cur_by_ticker]
+            rc_rows = [["Holding", "Current wt.", "Current risk", "Proposed wt.", "Proposed risk"]]
+            for tk in ordered:
+                c = cur_by_ticker.get(tk)
+                p = prop_by_ticker.get(tk)
+                rc_rows.append([
+                    tk,
+                    f"{c['weight'] * 100:.0f}%" if c else "n/a",
+                    f"{c['risk_pct'] * 100:.0f}%" if c else "n/a",
+                    f"{p['weight'] * 100:.0f}%" if p else "n/a",
+                    f"{p['risk_pct'] * 100:.0f}%" if p else "n/a",
+                ])
+            story.append(styled_table(rc_rows, [0.28, 0.18, 0.18, 0.18, 0.18]))
+            story.append(Paragraph(
+                f"Share of each allocation's annualized volatility attributable to each holding: "
+                f"current book {cur_ra['portfolio_vol'] * 100:.1f}% "
+                f"({cur_ra.get('n_obs', 0)} observations), proposed book "
+                f"{prop_ra['portfolio_vol'] * 100:.1f}% ({prop_ra.get('n_obs', 0)} observations). "
+                f"A holding's risk share can exceed its weight when it is more volatile or more "
+                f"correlated with the rest of the book; the concentration in the current book is the "
+                f"motivation for this rebalance.",
+                s_disclaimer))
+        else:
+            rc_rows = [["Holding", "Weight", "Share of risk"]]
+            for r in cur_ra["rows"]:
+                rc_rows.append([r["ticker"], f"{r['weight'] * 100:.0f}%", f"{r['risk_pct'] * 100:.0f}%"])
+            story.append(styled_table(rc_rows, [0.44, 0.28, 0.28]))
+            story.append(Paragraph(
+                f"Share of the current book's {cur_ra['portfolio_vol'] * 100:.1f}% annualized "
+                f"volatility attributable to each holding ({cur_ra.get('n_obs', 0)} observations). "
+                f"A holding's risk share can exceed its weight when it is more volatile or more "
+                f"correlated with the rest of the book; this concentration is the motivation for "
+                f"the rebalance.",
+                s_disclaimer))
 
     story.append(PageBreak())
 

@@ -35,6 +35,18 @@ FACTS = {
     "portfolio": {"event_return": -0.032, "peak_drawdown": -0.041},
     "benchmark": {"label": "S&P 500", "event_return": -0.058, "peak_drawdown": -0.062},
     "risk": {"regime": "High_Fragility", "fragility_score": 1.72},
+    # One-dollar-basis downside reconciliation. A single-event briefing carries
+    # no simulated scenario set, so worst_scenario is None (and no consistency
+    # flag can fire); this mirrors what _risk_reconciliation returns here.
+    "risk_reconciliation": {
+        "portfolio_value": 2_450_000,
+        "var_1d_pct": -0.021, "var_1d_dollars": -51_450.0,
+        "max_drawdown_pct": -0.052, "max_drawdown_dollars": -127_400.0,
+        "worst_scenario": None, "worst_scenario_dollars": None,
+        "forecast_downside_pct": -3.1, "forecast_downside_dollars": -75_950.0,
+        "fragility_label": "elevated (above the 1.5 fragile threshold)",
+        "flags": [],
+    },
     "forecast": {"model": "prophet", "horizon_days": 30, "return_pct": 1.8, "band_pct": 12.4},
     "holdings_impact": [
         {"ticker": "VTI", "name": "Vanguard Total Stock", "return": -0.055, "contribution": -0.0193},
@@ -52,7 +64,7 @@ def _fake(text: str) -> LlmResult:
 def _payload(**over):
     base = {
         "event_commentary": "ec", "benchmark_commentary": "bc",
-        "outlook": "ol", "considerations": ["c1", "c2"],
+        "risk_synthesis": "rs", "outlook": "ol", "considerations": ["c1", "c2"],
     }
     base.update(over)
     return json.dumps(base)
@@ -89,13 +101,35 @@ def test_market_event_prompt_omits_absent_sections():
     assert "Advisor's event description" not in p
 
 
+def test_market_event_prompt_grounds_reconciliation_on_one_basis():
+    p = rn.build_market_event_prompt(FACTS)
+    assert "Downside on one basis (dollars for this portfolio)" in p
+    assert "1-day VaR95: -$51K (-2.10%)" in p
+    assert "realized max drawdown: -$127K (-5.20%)" in p
+    assert "forecast downside (low end): -$76K" in p
+    assert "fragility reading: elevated (above the 1.5 fragile threshold)" in p
+    # No simulated scenario set in a single-event briefing -> no worst-scenario
+    # row and no consistency flag are fabricated.
+    assert "worst simulated scenario" not in p
+    assert "CONSISTENCY FLAG" not in p
+    # The narrator is instructed to produce the one-view synthesis field.
+    assert "risk_synthesis" in p
+
+
+def test_market_event_prompt_omits_reconciliation_when_absent():
+    p = rn.build_market_event_prompt(dict(FACTS, risk_reconciliation=None))
+    assert "Downside on one basis" not in p
+
+
 def test_run_market_event_strips_any_dash_that_slips_through():
     with patch.object(rn, "generate", return_value=_fake(_payload(
+            risk_synthesis="The event cost more than VaR — but less than the drawdown",
             outlook="Uncertainty is high — very high – indeed",
             considerations=["Watch VTI — it dominated the loss"]))):
         out, _ = rn.run_market_event(facts=FACTS)
     assert "—" not in json.dumps(out) and "–" not in json.dumps(out)
     assert out["outlook"] == "Uncertainty is high, very high, indeed"
+    assert out["risk_synthesis"] == "The event cost more than VaR, but less than the drawdown"
 
 
 def test_run_market_event_cache_key_tracks_facts():
@@ -129,6 +163,22 @@ def test_run_market_event_cache_key_handles_missing_benchmark_and_forecast():
     key = captured["cache_key_extra"]
     assert key["bench_return"] is None
     assert key["forecast_return"] is None
+
+
+def test_run_market_event_cache_key_tracks_reconciliation():
+    captured = {}
+
+    def _cap(prompt, **kw):
+        captured.update(kw)
+        return _fake(_payload())
+
+    with patch.object(rn, "generate", side_effect=_cap):
+        rn.run_market_event(facts=FACTS)
+    assert captured["cache_key_extra"]["recon_maxdd"] == pytest.approx(-0.052)
+    # Omitted reconciliation -> None in the cache key, never invented.
+    with patch.object(rn, "generate", side_effect=_cap):
+        rn.run_market_event(facts=dict(FACTS, risk_reconciliation=None))
+    assert captured["cache_key_extra"]["recon_maxdd"] is None
 
 
 def test_run_market_event_raises_on_malformed_json():
@@ -277,9 +327,28 @@ def _template_data(**over):
         ],
         "forecast_facts": {"model": "prophet", "horizon_days": 30,
                            "return_pct": 1.8, "band_pct": 12.4},
+        # Risk in one view: the standing downside measures on one dollar basis,
+        # beside the measured event impact. No scenario set for a single event,
+        # so worst_scenario is None and no consistency flag fires.
+        "risk_reconciliation": {
+            "portfolio_value": 2_450_000.0,
+            "var_1d_pct": -0.021, "var_1d_dollars": -51_450.0,
+            "max_drawdown_pct": -0.052, "max_drawdown_dollars": -127_400.0,
+            "worst_scenario": None, "worst_scenario_dollars": None,
+            "forecast_downside_pct": -3.1, "forecast_downside_dollars": -75_950.0,
+            "fragility_label": "elevated (above the 1.5 fragile threshold)",
+            "flags": [],
+        },
+        # Honest track record: directional accuracy with a 95% CI that includes
+        # the 50% coin-flip baseline (so it is NOT read as a reliable edge).
+        "track_record": {"hit_rate": 0.58, "n_steps": 60, "ci_low": 0.45,
+                         "ci_high": 0.71, "beats_coinflip": False,
+                         "best_model": "prophet"},
         "narrative": {
             "event_commentary": "The portfolio fell with the sell-off and partly recovered.",
             "benchmark_commentary": "The portfolio's drawdown stayed shallower than the benchmark's.",
+            "risk_synthesis": ("The event's move stayed within the portfolio's realized "
+                               "maximum drawdown; the 1-day VaR is the shallowest measure."),
             "outlook": "The model's median path implies a modest recovery over 30 trading days.",
             "considerations": ["Evaluate the VTI position given its -5.5% event return."],
         },
@@ -334,4 +403,38 @@ def test_generate_market_event_report_escapes_user_text(tmp_path):
         event_name="Rates <up> & vol",
         event_summary="Yields rose > 5% & spreads widened <sharply>.",
     ))
+    _assert_pdf(out)
+
+
+def test_generate_market_event_report_omits_reconciliation_and_track_record(tmp_path):
+    """No dollar reconciliation and no walk-forward validation figures: the
+    risk-in-one-view box degrades to just the measured event impact, and the
+    model-track-record line is omitted rather than fabricated."""
+    out = tmp_path / "event_no_recon.pdf"
+    generate_market_event_report(str(out), _template_data(
+        risk_reconciliation=None, track_record=None, narrative=None,
+    ))
+    _assert_pdf(out)
+
+
+def test_generate_market_event_report_surfaces_consistency_flag(tmp_path):
+    """When a consistency flag is present it is rendered; the PDF still builds."""
+    out = tmp_path / "event_flag.pdf"
+    recon = dict(_template_data()["risk_reconciliation"])
+    recon["flags"] = ["The worst simulated scenario is milder than the portfolio's "
+                      "own realized maximum drawdown; the stress set may understate "
+                      "tail risk."]
+    generate_market_event_report(str(out), _template_data(risk_reconciliation=recon))
+    _assert_pdf(out)
+
+
+def test_generate_market_event_report_escapes_ai_and_reconciliation_text(tmp_path):
+    """AI risk-synthesis text and the reconciliation's fragility label with
+    XML-special characters must not break the PDF build."""
+    out = tmp_path / "event_ai_escape.pdf"
+    data = _template_data()
+    data["narrative"]["risk_synthesis"] = "VaR < drawdown & the event move > 0."
+    data["risk_reconciliation"] = dict(data["risk_reconciliation"],
+                                       fragility_label="elevated & <flagged>")
+    generate_market_event_report(str(out), data)
     _assert_pdf(out)

@@ -150,6 +150,76 @@ def test_run_yearend_raises_on_malformed_json():
             rn.run_yearend(facts=FACTS)
 
 
+# Tier 3 facts: component risk decomposition, an honest track record with a
+# confidence interval, and a one-dollar-basis downside reconciliation.
+TIER3 = {
+    "risk_attribution": {
+        "portfolio_vol": 0.1105, "n_obs": 252,
+        "rows": [{"ticker": "VTI", "weight": 0.35, "risk_pct": 0.48},
+                 {"ticker": "GLD", "weight": 0.08, "risk_pct": 0.27}],
+    },
+    "track_record": {"hit_rate": 0.61, "n_steps": 84, "ci_low": 0.50,
+                     "ci_high": 0.72, "beats_coinflip": False, "best_model": "prophet"},
+    "risk_reconciliation": {
+        "var_1d_pct": -0.021, "var_1d_dollars": -51_450.0,
+        "max_drawdown_pct": -0.052, "max_drawdown_dollars": -127_400.0,
+        "worst_scenario": {"name": "bear_10", "return_pct": -18.0},
+        "worst_scenario_dollars": -441_000.0,
+        "forecast_downside_pct": -8.3, "forecast_downside_dollars": -203_350.0,
+        "fragility_label": "near its long-run median",
+        "flags": ["stress set may understate tail risk"],
+    },
+}
+
+
+def test_yearend_prompt_grounds_tier3_blocks():
+    p = rn.build_yearend_prompt(dict(FACTS, **TIER3))
+    assert "Risk contribution by holding (portfolio annualized volatility 11.1%" in p
+    assert "VTI: weight 35%, risk share 48%" in p
+    assert "Forecast track record with statistical confidence" in p
+    assert "95% CI 50% to 72%" in p and "NOT distinguishable from chance" in p
+    assert "Downside on one basis (dollars for this portfolio):" in p
+    assert "worst simulated scenario (bear_10): -$441K" in p
+    assert "CONSISTENCY FLAG: stress set may understate tail risk" in p
+
+
+def test_yearend_prompt_omits_tier3_when_absent():
+    p = rn.build_yearend_prompt(FACTS)  # FACTS carries none of the tier-3 keys
+    assert "Risk contribution by holding" not in p
+    assert "Forecast track record with statistical confidence" not in p
+    assert "Downside on one basis" not in p
+
+
+def test_run_yearend_cache_key_tracks_tier3_facts():
+    captured = {}
+
+    def _cap(prompt, **kw):
+        captured.update(kw)
+        return _fake(_payload())
+
+    with patch.object(rn, "generate", side_effect=_cap):
+        rn.run_yearend(facts=dict(FACTS, **TIER3))
+    key = captured["cache_key_extra"]
+    assert key["risk_share_top"] == pytest.approx(0.48)
+    assert key["track_ci_low"] == pytest.approx(0.50)
+    assert key["recon_worst"] == pytest.approx(-18.0)
+
+
+def test_run_yearend_cache_key_handles_missing_tier3():
+    captured = {}
+
+    def _cap(prompt, **kw):
+        captured.update(kw)
+        return _fake(_payload())
+
+    with patch.object(rn, "generate", side_effect=_cap):
+        rn.run_yearend(facts=FACTS)
+    key = captured["cache_key_extra"]
+    assert key["risk_share_top"] is None
+    assert key["track_ci_low"] is None
+    assert key["recon_worst"] is None
+
+
 # ── Router helpers: honest review-year series ─────────────────────────
 
 
@@ -329,6 +399,33 @@ def _template_data(**over):
                              0.97, 1.05, 0.92, 0.87, 1.15, 0.98],
         "model_accuracy": {"hit_rate": 0.61, "avg_error": 0.021,
                            "n_steps": 84, "best_model": "prophet"},
+        # Tier 3 depth: component risk decomposition, honest track record with a
+        # confidence interval, and a one-dollar-basis downside reconciliation.
+        "risk_attribution": {
+            "portfolio_vol": 0.1105, "n_obs": 252,
+            "rows": [
+                {"ticker": "VTI", "weight": 0.35, "risk_pct": 0.48},
+                {"ticker": "GLD", "weight": 0.08, "risk_pct": 0.27},
+                {"ticker": "BND", "weight": 0.25, "risk_pct": 0.11},
+                {"ticker": "QQQ", "weight": 0.32, "risk_pct": 0.14},
+            ],
+        },
+        "track_record": {"hit_rate": 0.61, "n_steps": 84, "ci_low": 0.50,
+                         "ci_high": 0.72, "beats_coinflip": False,
+                         "mape": 0.021, "best_model": "prophet"},
+        "risk_reconciliation": {
+            "portfolio_value": 2_450_000.0,
+            "var_1d_pct": -0.021, "var_1d_dollars": -51_450.0,
+            "max_drawdown_pct": -0.052, "max_drawdown_dollars": -127_400.0,
+            "worst_scenario": {"name": "bear_10", "return_pct": -18.0,
+                               "dollar_impact": -441_000.0},
+            "worst_scenario_dollars": -441_000.0,
+            "forecast_downside_pct": -8.3, "forecast_downside_dollars": -203_350.0,
+            "fragility_label": "near its long-run median",
+            "flags": ["The worst simulated scenario (-18.0%) is milder than the "
+                      "portfolio's own realized maximum drawdown; the stress set "
+                      "may understate tail risk."],
+        },
         "top_contributors": [
             {"ticker": "VTI", "name": "Vanguard Total Stock",
              "return": 0.142, "contribution": 0.0497},
@@ -364,6 +461,15 @@ def test_generate_yearend_report_builds_pdf(tmp_path):
     _assert_pdf(out)
 
 
+def test_generate_yearend_report_tier3_without_reconciliation(tmp_path):
+    """The common annual case: the risk-contribution table and the model track
+    record render, but with no scenarios or portfolio value the risk-in-one-view
+    dollar reconciliation is omitted rather than fabricated."""
+    out = tmp_path / "yearend_tier3.pdf"
+    generate_yearend_report(str(out), _template_data(risk_reconciliation=None))
+    _assert_pdf(out)
+
+
 def test_generate_yearend_report_numbers_only_partial_year(tmp_path):
     """No benchmark, no dollar values, no model accuracy, no narrative, and a
     partial year with missing months: the PDF still builds with the absent
@@ -380,6 +486,7 @@ def test_generate_yearend_report_numbers_only_partial_year(tmp_path):
         portfolio_return_ytd=float(np.prod([1 + m for m in monthly if m is not None]) - 1),
         coverage_label="March to October 2025", full_year=False,
         model_accuracy=None, narrative=None,
+        risk_attribution=None, track_record=None, risk_reconciliation=None,
         vol_series=[None, None, 14.5, 11.8, 10.3, 9.8, 10.5, 11.2, 10.0, 9.5, None, None],
         fragility_series=[None] * 12,
     ))

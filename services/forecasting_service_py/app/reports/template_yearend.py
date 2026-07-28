@@ -186,6 +186,21 @@ def generate_yearend_report(output_path, data):
         "fragility_series": [float or None] or None,
         # Real walk-forward validation figures, or None -> section omitted.
         "model_accuracy": {"hit_rate", "avg_error", "n_steps", "best_model"} or None,
+        # Component decomposition of portfolio volatility (share of risk vs
+        # weight), or None -> the risk-contribution table is omitted.
+        "risk_attribution": {"portfolio_vol", "n_obs",
+                             "rows": [{"ticker","weight","risk_pct"}]} or None,
+        # Directional accuracy with a 95% CI vs the 50% coin-flip baseline, or
+        # None -> the model track-record line is omitted.
+        "track_record": {"hit_rate","n_steps","ci_low","ci_high",
+                         "beats_coinflip","best_model"} or None,
+        # Every downside measure on one dollar basis (rendered only when real
+        # scenarios AND a portfolio value were supplied), or None -> omitted.
+        "risk_reconciliation": {"var_1d_pct","var_1d_dollars","max_drawdown_pct",
+                               "max_drawdown_dollars","worst_scenario",
+                               "worst_scenario_dollars","forecast_downside_pct",
+                               "forecast_downside_dollars","fragility_label",
+                               "flags"} or None,
         "top_contributors": [{"ticker","name","return","contribution"}],
         "bottom_contributors": [{"ticker","name","return","contribution"}],
         # AI narrative grounded in the numbers above (None -> numbers-only).
@@ -329,6 +344,69 @@ def generate_yearend_report(output_path, data):
         s_disclaimer))
     story.append(Spacer(1, 8))
 
+    # Risk contribution by holding: which position actually drove portfolio
+    # RISK over the year (component decomposition of volatility). A holding's
+    # share of risk can exceed its weight when it is more volatile or more
+    # correlated with the rest of the book. Omitted when unavailable.
+    ra = d.get("risk_attribution") or {}
+    if ra.get("rows"):
+        story.append(Paragraph("Risk contribution by holding", s_subheading))
+        rc_rows = [["Holding", "Weight", "Share of risk"]]
+        for r in ra["rows"]:
+            rc_rows.append([r["ticker"], f"{r['weight'] * 100:.0f}%",
+                            f"{r['risk_pct'] * 100:.0f}%"])
+        story.append(styled_table(rc_rows, [0.44, 0.28, 0.28]))
+        story.append(Paragraph(
+            f"Share of the portfolio's {ra['portfolio_vol'] * 100:.1f}% annualized volatility "
+            f"attributable to each holding ({ra.get('n_obs', 0)} observations). A holding's "
+            f"risk share can exceed its weight when it is more volatile or more correlated "
+            f"with the rest of the book.",
+            s_disclaimer))
+        story.append(Spacer(1, 8))
+
+    # Risk in one view: every downside measure on a common dollar basis, so the
+    # 1-day VaR, worst simulated scenario, realized drawdown, and forecast
+    # downside can be compared directly. Rendered only when a real scenario run
+    # AND a portfolio value were supplied; any consistency flag is surfaced.
+    rr = d.get("risk_reconciliation") or {}
+    _recon_keys = ("var_1d_dollars", "worst_scenario_dollars",
+                   "max_drawdown_dollars", "forecast_downside_dollars")
+    if any(rr.get(k) is not None for k in _recon_keys):
+        def _dol(v):
+            return f"{'+' if v > 0 else '-'}${abs(v):,.0f}" if v is not None else "n/a"
+
+        def _pf(v):  # fractional inputs (VaR, drawdown)
+            return f"{v * 100:+.2f}%" if v is not None else "n/a"
+
+        def _pp(v):  # already-percent inputs (scenario, forecast low end)
+            return f"{v:+.1f}%" if v is not None else "n/a"
+
+        story.append(Paragraph("Risk in one view", s_subheading))
+        rv_rows = [["Downside measure", "Percentage", "Dollar impact"]]
+        if rr.get("var_1d_dollars") is not None:
+            rv_rows.append(["1-day Value at Risk (95%)", _pf(rr.get("var_1d_pct")),
+                            _dol(rr["var_1d_dollars"])])
+        ws = rr.get("worst_scenario") or {}
+        if rr.get("worst_scenario_dollars") is not None:
+            rv_rows.append([
+                f"Worst simulated scenario ({humanize_label(ws.get('name', ''))})",
+                _pp(ws.get("return_pct")), _dol(rr["worst_scenario_dollars"])])
+        if rr.get("max_drawdown_dollars") is not None:
+            rv_rows.append(["Realized maximum drawdown", _pf(rr.get("max_drawdown_pct")),
+                            _dol(rr["max_drawdown_dollars"])])
+        if rr.get("forecast_downside_dollars") is not None:
+            rv_rows.append(["Forecast downside (low end)", _pp(rr.get("forecast_downside_pct")),
+                            _dol(rr["forecast_downside_dollars"])])
+        story.append(styled_table(rv_rows, [0.46, 0.24, 0.30]))
+        story.append(Paragraph(
+            f"Dollar figures use the supplied portfolio value. Scenario figures are "
+            f"simulated median outcomes versus the base scenario, not probabilities. "
+            f"Fragility reading: {escape(str(rr.get('fragility_label', 'n/a')))}.",
+            s_disclaimer))
+        for fl in rr.get("flags", []):
+            story.append(Paragraph(f"Note: {escape(str(fl))}", s_disclaimer))
+        story.append(Spacer(1, 8))
+
     # Top / bottom contributors: only holdings with real price data appear.
     top_contribs = d.get("top_contributors") or []
     bottom_contribs = d.get("bottom_contributors") or []
@@ -384,6 +462,24 @@ def generate_yearend_report(output_path, data):
         ))
         if narrative.get("model_commentary"):
             story.append(Paragraph(escape(narrative["model_commentary"]), s_body_sm))
+
+        # Model track record: the same directional accuracy placed against its
+        # 95% confidence interval and the 50% coin-flip baseline, so a hit rate
+        # near 50% is not read as a reliable edge (nor a real edge dismissed).
+        tr = d.get("track_record") or {}
+        if tr.get("hit_rate") is not None:
+            verdict = ("statistically above the 50% coin-flip baseline"
+                       if tr.get("beats_coinflip")
+                       else "not statistically distinguishable from a 50% coin flip")
+            story.append(Spacer(1, 4))
+            story.append(Paragraph(
+                f"<b>Model track record.</b> Adjusting for sample size, the "
+                f"{tr['hit_rate'] * 100:.0f}% directional accuracy over {tr['n_steps']} "
+                f"validation steps carries a 95% confidence interval of "
+                f"{tr['ci_low'] * 100:.0f}% to {tr['ci_high'] * 100:.0f}%, which is {verdict}. "
+                f"Forecasting market direction is genuinely hard; treat any projection as one "
+                f"input, not a certainty.",
+                s_body_sm))
         story.append(Spacer(1, 14))
 
     # Year ahead: current measured risk state plus the AI narrative grounded in

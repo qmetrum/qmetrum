@@ -102,9 +102,23 @@ def generate_market_event_report(output_path, data):
         # The engine's ACTUAL forecast facts (None -> outlook says none available).
         "forecast_facts": {"model", "horizon_days", "return_pct",
                            "band_pct" (float or None)} or None,
+        # Every downside measure on ONE dollar basis, to place beside the
+        # measured event impact (None -> the "Risk in one view" box shows only
+        # the event impact). The worst-scenario row is absent for this briefing
+        # (no simulated scenario set is supplied).
+        "risk_reconciliation": {"var_1d_pct","var_1d_dollars","max_drawdown_pct",
+                                "max_drawdown_dollars","worst_scenario",
+                                "worst_scenario_dollars","forecast_downside_pct",
+                                "forecast_downside_dollars","fragility_label",
+                                "flags"} or None,
+        # Directional accuracy with a 95% CI and the coin-flip baseline, so the
+        # forward outlook is not read as more reliable than validation supports
+        # (None -> the track-record line is omitted).
+        "track_record": {"hit_rate","n_steps","ci_low","ci_high",
+                         "beats_coinflip","best_model"} or None,
         # AI narrative grounded in the numbers above (None -> numbers-only).
-        "narrative": {"event_commentary", "benchmark_commentary", "outlook",
-                      "considerations"} or None,
+        "narrative": {"event_commentary", "benchmark_commentary", "risk_synthesis",
+                      "outlook", "considerations"} or None,
         # REAL trading-date window sliced around the event.
         "dates": [datetime], "portfolio_index": [float],
         "benchmark_index": [float] or None,
@@ -274,6 +288,62 @@ def generate_market_event_report(output_path, data):
     story.append(Paragraph(" ".join(notes), s_disclaimer))
     story.append(Spacer(1, 12))
 
+    # Risk in one view: the measured event impact placed on the SAME dollar
+    # basis as the portfolio's standing risk measures (1-day VaR, realized
+    # maximum drawdown) and, when the model supplied an interval, the forecast
+    # downside, so a client can see how this event compares to what the
+    # portfolio already carries rather than reading each number in isolation.
+    # Any internal-consistency flag is surfaced plainly. The event-impact row is
+    # always shown; the other rows appear only when the reconciliation supplied
+    # a real figure (omit-when-None).
+    rr = d.get("risk_reconciliation") or {}
+    event_ret = d["portfolio_return_event"]
+    event_dollars = event_ret * d["portfolio_value"]
+
+    def _dol(v):
+        return f"{'+' if v > 0 else '-'}${abs(v):,.0f}" if v is not None else "n/a"
+
+    def _pf(v):   # fractional inputs (event move, VaR, realized drawdown)
+        return f"{v * 100:+.2f}%" if v is not None else "n/a"
+
+    def _pp(v):   # already-percent inputs (worst scenario, forecast low end)
+        return f"{v:+.1f}%" if v is not None else "n/a"
+
+    story.append(Paragraph("RISK IN ONE VIEW", s_section))
+    story.append(Paragraph("This event against the portfolio's standing risk", s_subheading))
+    rv_rows = [["Downside measure", "Percentage", "Dollar impact"]]
+    rv_rows.append(["Measured event impact", _pf(event_ret), _dol(event_dollars)])
+    if rr.get("var_1d_dollars") is not None:
+        rv_rows.append(["1-day Value at Risk (95%)", _pf(rr.get("var_1d_pct")),
+                        _dol(rr["var_1d_dollars"])])
+    ws = rr.get("worst_scenario") or {}
+    if rr.get("worst_scenario_dollars") is not None:
+        rv_rows.append([
+            f"Worst simulated scenario ({humanize_label(ws.get('name', ''))})",
+            _pp(ws.get("return_pct")), _dol(rr["worst_scenario_dollars"])])
+    if rr.get("max_drawdown_dollars") is not None:
+        rv_rows.append(["Realized maximum drawdown", _pf(rr.get("max_drawdown_pct")),
+                        _dol(rr["max_drawdown_dollars"])])
+    if rr.get("forecast_downside_dollars") is not None:
+        rv_rows.append(["Forecast downside (low end)", _pp(rr.get("forecast_downside_pct")),
+                        _dol(rr["forecast_downside_dollars"])])
+    story.append(styled_table(rv_rows, [0.46, 0.24, 0.30]))
+    if narrative.get("risk_synthesis"):
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(escape(narrative["risk_synthesis"]), s_body_sm))
+    recon_note = (
+        "The event impact is measured from the last close before the event through the end "
+        "of the window. The 1-day Value at Risk and realized maximum drawdown are the "
+        "portfolio's standing risk measures over the engine's analysis window, not figures "
+        "from this event. Dollar figures use the portfolio value shown on the cover."
+    )
+    if rr.get("fragility_label"):
+        recon_note += f" Fragility reading: {escape(str(rr['fragility_label']))}."
+    story.append(Paragraph(recon_note, s_disclaimer))
+    for fl in rr.get("flags", []):
+        story.append(Paragraph(f"Note: {escape(str(fl))}", s_disclaimer))
+    story.append(Spacer(1, 12))
+
     # Forward outlook: only the engine's actual outputs, never a canned
     # recovery sentence. The AI narrative (when available) is grounded in the
     # same facts and clearly disclaimed below.
@@ -300,6 +370,24 @@ def generate_market_event_report(output_path, data):
         story.append(Paragraph(
             "No model forecast was available for this run, so no projection is shown.",
             s_body))
+
+    # Model track record: the projection's directional accuracy against its 95%
+    # confidence interval and the 50% coin-flip baseline, so the outlook is not
+    # read as more reliable than walk-forward validation supports. Omitted when
+    # the engine produced no validation figures.
+    tr = d.get("track_record") or {}
+    if tr.get("hit_rate") is not None:
+        verdict = ("statistically above the 50% coin-flip baseline"
+                   if tr.get("beats_coinflip")
+                   else "not statistically distinguishable from a 50% coin flip")
+        story.append(Paragraph(
+            f"<b>Model track record.</b> On walk-forward validation the winning model "
+            f"({escape(str(tr.get('best_model', 'ensemble')))}) called direction correctly "
+            f"{tr['hit_rate'] * 100:.0f}% of the time over {tr['n_steps']} steps "
+            f"(95% confidence interval {tr['ci_low'] * 100:.0f}% to {tr['ci_high'] * 100:.0f}%), "
+            f"{verdict}. Treat the projection above as one input, not a certainty.",
+            s_body_sm))
+
     if narrative.get("outlook"):
         story.append(Paragraph(escape(narrative["outlook"]), s_body_sm))
     story.append(Spacer(1, 6))
@@ -313,7 +401,8 @@ def generate_market_event_report(output_path, data):
             story.append(Paragraph(f"•  {escape(c)}", s_body_sm))
 
     if any(narrative.get(k) for k in
-           ("event_commentary", "benchmark_commentary", "outlook", "considerations")):
+           ("event_commentary", "benchmark_commentary", "risk_synthesis",
+            "outlook", "considerations")):
         story.append(Spacer(1, 6))
         story.append(Paragraph(
             "Narrative commentary in this briefing was AI-generated strictly from the "

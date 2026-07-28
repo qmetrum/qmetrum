@@ -156,6 +156,11 @@ class YearEndReportRequest(BaseModel):
     portfolio_value_start: Optional[float] = None
     portfolio_value_end: Optional[float] = None
     proposed_changes: Optional[List[str]] = None
+    # Optional REAL simulated scenario runs (same item shape the quarterly
+    # report accepts). When supplied AND a portfolio value is known, the review
+    # puts every downside measure on one dollar basis (risk in one view); when
+    # absent that section is simply omitted, never fabricated.
+    scenarios: Optional[List[ReportScenarioItem]] = None
 
 
 # ────────────────────────────────────────────────────────────
@@ -1243,8 +1248,19 @@ def generate_onboarding(
     if not findings:
         findings.append("Portfolio risk metrics are broadly aligned with the stated risk tolerance.")
 
+    # Component risk decomposition: which holding drives the portfolio's RISK
+    # (share of volatility vs weight). This is the concentration story an
+    # onboarding assessment is about, so a small volatile position dominating
+    # risk becomes a computed number, not an assertion. Omitted (None) when
+    # there are fewer than two holdings or too little aligned price history.
+    try:
+        risk_attr = _risk_attribution_block(data)
+    except Exception as e:
+        logger.warning(f"Onboarding risk attribution failed: {e}"); risk_attr = None
+
     # Narrative layer: the measured risk profile in plain terms vs the client's
-    # stated tolerance and target, what to watch, and options to evaluate,
+    # stated tolerance and target, what to watch (including which holding drives
+    # the risk when the decomposition is available), and options to evaluate,
     # grounded in the SAME numbers the report renders. Unavailable -> the
     # assessment ships numbers-only, never canned text.
     narrative = None
@@ -1256,6 +1272,7 @@ def generate_onboarding(
             "target_vol": payload.target_vol,
             "risk_metrics": rm,
             "allocation": allocation,
+            "risk_attribution": risk_attr,
             "holdings": holdings_list,
         })
     except Exception as e:
@@ -1274,6 +1291,7 @@ def generate_onboarding(
         "max_drawdown": rm["max_drawdown"],
         "holdings": holdings_list,
         "current_allocation": allocation,
+        "risk_attribution": risk_attr,
         "risk_findings": findings,
         "narrative": narrative,
     }
@@ -1344,6 +1362,7 @@ def generate_event_report(
     fc_res = data.get("forecast_result") or {}
     fp = fc_res.get("forecast_prices") or []
     forecast_facts = None
+    fc_facts = {}
     if len(fp) >= 2 and fp[0]:
         forecast_facts = {
             "model": str(data.get("model_used") or "unknown"),
@@ -1351,13 +1370,43 @@ def generate_event_report(
             "return_pct": (fp[-1] / fp[0] - 1) * 100,
             "band_pct": None,
         }
+        # Return-basis facts for the one-dollar reconciliation: range_low_pct is
+        # the low end of the winning model's own interval (omitted when absent,
+        # never approximated).
+        fc_facts["return_pct"] = (fp[-1] / fp[0] - 1) * 100
         lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
         if lo and hi and fp[-1]:
             forecast_facts["band_pct"] = (hi[-1] - lo[-1]) / fp[-1] * 100
+        if lo and hi and fp[0]:
+            fc_facts["range_low_pct"] = (lo[-1] / fp[0] - 1) * 100
+            fc_facts["range_high_pct"] = (hi[-1] / fp[0] - 1) * 100
 
-    # Narrative layer: what happened in the window, benchmark comparison, and
-    # an outlook grounded in the actual forecast. Unavailable -> the briefing
-    # ships numbers-only, never canned text.
+    # Risk in one view: place the standing downside measures (1-day VaR,
+    # realized maximum drawdown, and the forecast downside when the model
+    # produced an interval) on the SAME dollar basis the template uses for the
+    # measured event impact. This briefing carries no simulated scenario set,
+    # so the worst-scenario row and the stress-milder-than-drawdown consistency
+    # flag simply do not fire (omit-when-None). Failure degrades to omitting the
+    # box, never to invented numbers.
+    try:
+        risk_reconciliation = _risk_reconciliation(data, portfolio_value, [], fc_facts)
+    except Exception as e:
+        logger.warning(f"Market event risk reconciliation failed: {e}")
+        risk_reconciliation = None
+
+    # Forecast track record: directional accuracy with a 95% confidence interval
+    # and the coin-flip baseline, so the forward outlook shown below is not read
+    # as more reliable than walk-forward validation actually supports. None when
+    # the engine produced no validation figures.
+    try:
+        track_record = _forecast_track_record(data)
+    except Exception as e:
+        logger.warning(f"Market event forecast track record failed: {e}")
+        track_record = None
+
+    # Narrative layer: what happened in the window, benchmark comparison, a
+    # one-dollar-basis risk synthesis, and an outlook grounded in the actual
+    # forecast. Unavailable -> the briefing ships numbers-only, never canned text.
     narrative = None
     try:
         narrative, _ = report_narrator.run_market_event(facts={
@@ -1382,6 +1431,7 @@ def generate_event_report(
                 if bench_event_return is not None else None
             ),
             "risk": {"regime": rm["regime"], "fragility_score": rm["fragility_score"]},
+            "risk_reconciliation": risk_reconciliation,
             "forecast": forecast_facts,
             "holdings_impact": holdings_impact,
         })
@@ -1405,6 +1455,8 @@ def generate_event_report(
         "fragility_score": rm["fragility_score"],
         "holdings_impact": holdings_impact,
         "forecast_facts": forecast_facts,
+        "risk_reconciliation": risk_reconciliation,
+        "track_record": track_record,
         "narrative": narrative,
         "dates": dates,
         "portfolio_index": window["port_idx"].tolist(),
@@ -1522,9 +1574,27 @@ def generate_rebalance_report(
         "sortino": proposed_rm["sortino_ratio"],
     }
 
+    # Component risk decomposition of the CURRENT allocation: which holding
+    # drives the book's risk today (share of volatility vs weight) is the
+    # motivation for rebalancing, so a small volatile position dominating risk
+    # becomes a computed number rather than an assertion. Both allocations were
+    # already run through the engine, so the proposed book's decomposition is
+    # essentially free; when it is available too, the report shows a
+    # current-vs-proposed risk-share comparison. Each block is omitted (None)
+    # when its book has fewer than two holdings or too little aligned history.
+    try:
+        current_risk_attr = _risk_attribution_block(current_data)
+    except Exception as e:
+        logger.warning(f"Rebalancing current risk attribution failed: {e}"); current_risk_attr = None
+    try:
+        proposed_risk_attr = _risk_attribution_block(proposed_data)
+    except Exception as e:
+        logger.warning(f"Rebalancing proposed risk attribution failed: {e}"); proposed_risk_attr = None
+
     # Narrative layer: what the proposal changes and why it matters, grounded
-    # in the SAME computed deltas the report renders. Unavailable -> the PDF
-    # ships numbers-only, never canned text.
+    # in the SAME computed deltas the report renders (including which holding
+    # concentrates the book's risk today). Unavailable -> the PDF ships
+    # numbers-only, never canned text.
     narrative = None
     try:
         narrative, _ = report_narrator.run_rebalancing(facts={
@@ -1534,6 +1604,8 @@ def generate_rebalance_report(
             "proposed_metrics": proposed_metrics,
             "trades": trades,
             "scenarios": scenario_rows,
+            "risk_attribution": current_risk_attr,
+            "proposed_risk_attribution": proposed_risk_attr,
             "rationale": payload.rationale,
         })
     except Exception as e:
@@ -1549,6 +1621,8 @@ def generate_rebalance_report(
         "proposed_metrics": proposed_metrics,
         "trades": trades,
         "scenarios": scenario_rows,
+        "risk_attribution": current_risk_attr,
+        "proposed_risk_attribution": proposed_risk_attr,
         "rationale": payload.rationale,
         "tax_considerations": payload.tax_considerations,
         "narrative": narrative,
@@ -1645,6 +1719,68 @@ def generate_year_end(
     top_contributors = _compute_top_contributors(data, year, top=True)
     bottom_contributors = _compute_top_contributors(data, year, top=False)
 
+    # Tier 3 depth for the annual review, computed from the SAME real data:
+    #  - which holding drove portfolio RISK over the year (component vol
+    #    decomposition, share of risk vs weight);
+    #  - an honest forecast track record (directional accuracy with a 95%
+    #    confidence interval vs the 50% coin-flip baseline), since a year-end
+    #    naturally reviews how the models did.
+    # Each helper returns None when its inputs are insufficient; the section is
+    # then omitted rather than invented.
+    try:
+        risk_attr = _risk_attribution_block(data)
+    except Exception as e:
+        logger.warning(f"Year-end risk attribution failed: {e}"); risk_attr = None
+    try:
+        track_record = _forecast_track_record(data)
+    except Exception as e:
+        logger.warning(f"Year-end track record failed: {e}"); track_record = None
+
+    # Optional forward scenarios, same shape the quarterly accepts. The
+    # risk-in-one-view reconciliation is a DOLLAR synthesis, so it renders only
+    # when a real simulated run is supplied AND a portfolio value is known
+    # (preferring the ending value); otherwise it is omitted, never fabricated.
+    rec_value = value_end if value_end is not None else value_start
+    scenario_rows: list = []
+    scenario_items = [
+        i.model_dump() for i in (payload.scenarios or [])
+        if not i.name.startswith("_")
+        and isinstance(i.fan.get("central"), list) and len(i.fan["central"]) >= 2
+    ]
+    if scenario_items and rec_value is not None:
+        try:
+            for f in scenario_explainer.derive_facts(scenario_items, rec_value):
+                ret = f["vs_base_pct"] if f["vs_base_pct"] is not None else f["path_return_pct"]
+                scenario_rows.append({
+                    "name": f["name"],
+                    "is_base": f["is_base"],
+                    "return_pct": ret,
+                    "dollar_impact": f["dollar_impact"],
+                    "downside_pct": f["downside_pct"],
+                    "band_pct": f["band_pct"],
+                })
+        except Exception as e:
+            logger.warning(f"Year-end scenario derivation failed: {e}")
+            scenario_rows = []
+
+    # Forecast facts on the same basis (only the low end feeds the dollar
+    # reconciliation), pulled from the engine's actual projection.
+    fc_res = data.get("forecast_result") or {}
+    fp = fc_res.get("forecast_prices") or []
+    fc_facts: dict = {}
+    if len(fp) >= 2 and fp[0]:
+        lo, hi = fc_res.get("lower_ci") or [], fc_res.get("upper_ci") or []
+        if lo and hi and fp[0]:
+            fc_facts["range_low_pct"] = (lo[-1] / fp[0] - 1) * 100
+            fc_facts["range_high_pct"] = (hi[-1] / fp[0] - 1) * 100
+
+    risk_reconciliation = None
+    if scenario_rows and rec_value is not None:
+        try:
+            risk_reconciliation = _risk_reconciliation(data, rec_value, scenario_rows, fc_facts)
+        except Exception as e:
+            logger.warning(f"Year-end risk reconciliation failed: {e}")
+
     # Narrative layer: how the year actually went, honest model commentary
     # only when real walk-forward figures exist, and a year-ahead grounded in
     # the current regime. Unavailable -> numbers-only report, never canned
@@ -1679,6 +1815,9 @@ def generate_year_end(
             "model_accuracy": model_accuracy,
             "top_contributors": top_contributors,
             "bottom_contributors": bottom_contributors,
+            "risk_attribution": risk_attr,
+            "track_record": track_record,
+            "risk_reconciliation": risk_reconciliation,
         })
     except Exception as e:
         logger.warning(f"Year-end narrative unavailable: {e}")
@@ -1712,6 +1851,9 @@ def generate_year_end(
         "model_accuracy": model_accuracy,
         "top_contributors": top_contributors,
         "bottom_contributors": bottom_contributors,
+        "risk_attribution": risk_attr,
+        "track_record": track_record,
+        "risk_reconciliation": risk_reconciliation,
         "narrative": narrative,
         "proposed_changes": payload.proposed_changes,
     }

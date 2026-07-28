@@ -129,6 +129,10 @@ def generate_onboarding_report(output_path, data):
         "max_drawdown": float,
         "holdings": [{"ticker","name","asset_type","weight","value"}],
         "current_allocation": {"Equity": 0.65, ...},   # by asset type
+        # Component risk decomposition: which holding drives portfolio RISK
+        # (share of volatility vs weight). None when unavailable; omitted then.
+        "risk_attribution": {"portfolio_vol", "n_obs",
+                             "rows": [{"ticker","weight","risk_pct"}]} | None,
         "risk_findings": [str, ...],    # computed sentences from the router
         # Optional AI narrative grounded only in the numbers above.
         "narrative": {"risk_profile_summary","what_to_watch","considerations"},
@@ -236,6 +240,35 @@ def generate_onboarding_report(output_path, data):
 
     story.append(styled_table(h_data, [0.10, 0.32, 0.20, 0.14, 0.24]))
     story.append(Spacer(1, 14))
+
+    # Risk concentration: which holding actually drives the portfolio's RISK
+    # (share of volatility), which can diverge sharply from its weight. For a
+    # new client this is the core concentration question, so it is a computed
+    # decomposition rather than an assertion. Omitted when the router could not
+    # compute it (fewer than two holdings or too little aligned price history).
+    ra = d.get("risk_attribution") or {}
+    if ra.get("rows"):
+        story.append(Paragraph("RISK CONCENTRATION", s_section))
+        story.append(Paragraph("Which holding drives the portfolio's risk", s_heading))
+        story.append(Paragraph(
+            "Weight is how much money sits in each holding. Share of risk is how much "
+            "of the portfolio's volatility each holding actually drives, computed from "
+            "the real return covariance. When a holding's share of risk runs well above "
+            "its weight, that position is concentrating risk out of proportion to its "
+            "size, which is often the first thing worth discussing with a new client.",
+            s_body))
+        rc_rows = [["Holding", "Weight", "Share of risk"]]
+        for r in ra["rows"]:
+            rc_rows.append([r["ticker"], f"{r['weight'] * 100:.0f}%",
+                            f"{r['risk_pct'] * 100:.0f}%"])
+        story.append(styled_table(rc_rows, [0.44, 0.28, 0.28]))
+        story.append(Paragraph(
+            f"Share of the portfolio's {ra['portfolio_vol'] * 100:.1f}% annualized volatility "
+            f"attributable to each holding ({ra.get('n_obs', 0)} observations). A holding's "
+            f"risk share can exceed its weight when it is more volatile or more correlated "
+            f"with the rest of the book.",
+            s_disclaimer))
+        story.append(Spacer(1, 14))
 
     # AI narrative: what to watch + options to evaluate (replaces the old
     # canned "recommended next steps" boilerplate; omitted when unavailable).
