@@ -82,7 +82,7 @@ export function TopBar() {
         {auth.isAuthenticated ? (
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] px-3 py-1.5">
-              <div className="h-6 w-6 rounded-full bg-[var(--navy)] flex items-center justify-center">
+              <div className="h-6 w-6 rounded-full bg-[var(--btn-navy)] flex items-center justify-center">
                 <span className="text-xs font-semibold text-white">
                   {(
                     (auth.user?.profile.name as string | undefined) ??

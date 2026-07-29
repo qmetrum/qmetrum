@@ -234,7 +234,7 @@ export function AlertSettingsCard({ title = "Alert Settings" }: { title?: string
             type="button"
             onClick={() => monitor.mutate()}
             disabled={monitor.isPending}
-            className="rounded bg-[var(--navy)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+            className="rounded bg-[var(--btn-navy)] px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
             {monitor.isPending ? "Setting up…" : "Monitor all my holdings"}
           </button>

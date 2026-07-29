@@ -20,7 +20,7 @@ type Props = {
 
 const SENTIMENT_STYLE: Record<string, { bg: string; dot: string; label: string }> = {
   bullish: { bg: "bg-[var(--teal-light)] text-[var(--teal)]", dot: "bg-[var(--teal)]", label: "Bullish" },
-  bearish: { bg: "bg-[#FDECEC] text-[var(--coral)]", dot: "bg-[var(--coral)]", label: "Bearish" },
+  bearish: { bg: "bg-[var(--coral-light)] text-[var(--coral)]", dot: "bg-[var(--coral)]", label: "Bearish" },
   mixed: { bg: "bg-[var(--amber-light)] text-[var(--amber)]", dot: "bg-[var(--amber)]", label: "Mixed" },
   neutral: { bg: "bg-[var(--content-bg)] text-[var(--text-muted)]", dot: "bg-[var(--text-muted)]", label: "Neutral" },
 };

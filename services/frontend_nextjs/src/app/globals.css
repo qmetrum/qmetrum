@@ -5,6 +5,7 @@
   --navy: #0B1D3A;
   --navy-dark: #071428;
   --navy-light: #132D54;
+  --btn-navy: #0B1D3A;   /* dark button/toggle surface; stays dark in dark mode */
   --slate: #2D3E50;
   --teal: #0F8B6E;
   --teal-light: #E6F5F0;
@@ -47,6 +48,18 @@
 
 /* ── Dark theme overrides ── */
 html.dark {
+  /* Brand palette: colors used as TEXT must become readable on dark surfaces,
+     and the light pill tints must become dark tints. (bg-navy buttons use the
+     separate --btn-navy so they stay dark.) */
+  --navy: #E8ECF2;
+  --slate: #B8C0CC;
+  --teal-muted: #34D399;
+  --teal-light: rgba(16, 185, 129, 0.15);
+  --coral-light: rgba(239, 83, 80, 0.15);
+  --amber-light: rgba(245, 158, 11, 0.15);
+  --blue-light: rgba(59, 130, 246, 0.15);
+  --btn-navy: #1A2740;
+
   --sidebar-bg: #0A0F1A;
   --sidebar-hover: #141C2E;
   --sidebar-active: #1A2740;
@@ -123,6 +136,31 @@ html.dark header {
   background-color: var(--card-bg) !important;
   border-color: var(--card-border) !important;
 }
+
+/* Dark theme: regime badges (defined with a hardcoded light palette above) */
+html.dark .regime-normal        { background: rgba(16, 185, 129, 0.15); color: #34D399; }
+html.dark .regime-high-fragility { background: rgba(239, 83, 80, 0.15); color: #F87171; }
+html.dark .regime-low-vol       { background: rgba(59, 130, 246, 0.15); color: #60A5FA; }
+
+/* Dark theme: recharts axes / ticks / grid / labels / legend adapt everywhere.
+   (Presentation attributes like recharts' default #666 tick fill are overridden
+   by any CSS rule, so these apply to every chart without touching components.) */
+html.dark .recharts-cartesian-axis-tick text,
+html.dark .recharts-cartesian-axis-tick-value,
+html.dark .recharts-text,
+html.dark .recharts-label { fill: var(--text-secondary); }
+html.dark .recharts-cartesian-grid line,
+html.dark .recharts-cartesian-axis-line,
+html.dark .recharts-cartesian-axis-tick-line,
+html.dark .recharts-reference-line line { stroke: var(--card-border); }
+html.dark .recharts-legend-item-text { color: var(--text-secondary) !important; }
+
+/* Dark theme: recolor chart SERIES that are drawn in near-black brand hexes
+   (recharts takes literal stroke/fill attrs, so target them by value). Vivid
+   accents (teal/coral/amber/blue) are left as-is -- they read fine on dark. */
+html.dark [stroke="#2D3E50"], html.dark [stroke="#1A2B45"],
+html.dark [stroke="#0B1D3A"], html.dark [stroke="#1A1A2E"] { stroke: #B8C0CC; }
+html.dark [fill="#2D3E50"], html.dark [fill="#0B1D3A"], html.dark [fill="#1A1A2E"] { fill: #B8C0CC; }
 
 html, body {
   width: 100%;

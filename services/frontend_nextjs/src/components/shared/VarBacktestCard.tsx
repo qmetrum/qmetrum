@@ -359,7 +359,7 @@ function ExplainPanel({ portfolioId }: { portfolioId: string | number }) {
           <button
             onClick={() => m.mutate()}
             disabled={m.isPending}
-            className="text-xs font-medium bg-[var(--navy)] text-white px-3 py-1.5 rounded-lg hover:opacity-90 disabled:opacity-50"
+            className="text-xs font-medium bg-[var(--btn-navy)] text-white px-3 py-1.5 rounded-lg hover:opacity-90 disabled:opacity-50"
           >
             {m.isPending ? "Reading…" : data ? "Refresh" : "Explain this backtest"}
           </button>
@@ -452,7 +452,7 @@ export function VarBacktestCard({ portfolioId }: Props) {
             {(Object.keys(VIEW_LABEL) as View[]).map((v) => (
               <button key={v} onClick={() => setView(v)}
                 className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                  view === v ? "bg-[var(--navy)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--navy)]"
+                  view === v ? "bg-[var(--btn-navy)] text-white" : "text-[var(--text-secondary)] hover:text-[var(--navy)]"
                 }`}>
                 {VIEW_LABEL[v]}
               </button>

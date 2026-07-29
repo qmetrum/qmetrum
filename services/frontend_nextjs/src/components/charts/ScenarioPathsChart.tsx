@@ -173,7 +173,7 @@ export function ScenarioPathsChart({
           onClick={() => setSelected(null)}
           className={`rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
             effectiveSelected === null
-              ? "bg-[var(--navy)] text-white"
+              ? "bg-[var(--btn-navy)] text-white"
               : "border border-[var(--border)] bg-white text-[var(--text-primary)] hover:bg-[var(--content-bg)]"
           }`}
         >

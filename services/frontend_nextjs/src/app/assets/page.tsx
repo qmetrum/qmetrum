@@ -54,7 +54,7 @@ export default function AssetsPage() {
         <button
           onClick={doSearch}
           disabled={searching || !query.trim()}
-          className="text-sm font-medium bg-[var(--navy)] text-white px-5 py-2.5 rounded-lg hover:opacity-90 disabled:opacity-50"
+          className="text-sm font-medium bg-[var(--btn-navy)] text-white px-5 py-2.5 rounded-lg hover:opacity-90 disabled:opacity-50"
         >
           {searching ? "Searching..." : "Search"}
         </button>

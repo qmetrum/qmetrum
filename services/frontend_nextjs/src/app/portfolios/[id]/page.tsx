@@ -843,7 +843,7 @@ export default function PortfolioDetailPage() {
                 <button
                   onClick={addAsset}
                   disabled={!newTicker.trim()}
-                  className="text-xs font-medium bg-[var(--navy)] text-white px-3 py-1 rounded hover:opacity-90 disabled:opacity-50"
+                  className="text-xs font-medium bg-[var(--btn-navy)] text-white px-3 py-1 rounded hover:opacity-90 disabled:opacity-50"
                 >
                   + Add
                 </button>

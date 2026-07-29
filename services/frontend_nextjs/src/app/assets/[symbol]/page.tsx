@@ -244,7 +244,7 @@ export default function AssetDetailPage() {
             onClick={() => toggleSaved(ticker)}
             className={`text-sm font-medium px-4 py-2 rounded-lg border transition-colors ${
               isSaved(ticker)
-                ? "bg-[var(--navy)] text-white border-[var(--navy)]"
+                ? "bg-[var(--btn-navy)] text-white border-[var(--btn-navy)]"
                 : "bg-white text-[var(--navy)] border-[var(--card-border)] hover:bg-[var(--content-bg)]"
             }`}
           >

@@ -306,7 +306,7 @@ export default function ClientsPage() {
             <button
               onClick={() => createMutation.mutate()}
               disabled={!newPortfolio.name.trim() || createMutation.isPending}
-              className="rounded-lg bg-[var(--navy)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+              className="rounded-lg bg-[var(--btn-navy)] px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
               {createMutation.isPending ? "Creating..." : "Create Portfolio"}
             </button>

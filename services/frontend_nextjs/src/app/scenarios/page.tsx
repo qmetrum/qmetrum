@@ -721,7 +721,7 @@ export default function ScenariosPage() {
               placeholder="Scenario name"
               className="flex-1 rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm outline-none focus:border-[var(--teal)]"
             />
-            <button onClick={addCustom} className="rounded-lg bg-[var(--navy)] px-3 py-2 text-sm font-medium text-white hover:opacity-90">
+            <button onClick={addCustom} className="rounded-lg bg-[var(--btn-navy)] px-3 py-2 text-sm font-medium text-white hover:opacity-90">
               Add
             </button>
           </div>

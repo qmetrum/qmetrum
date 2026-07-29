@@ -41,8 +41,8 @@ export default function DashboardPage() {
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
               health?.status === "ok" || health?.status
-                ? "bg-[#E6F5F0] text-[#0A6B54]"
-                : "bg-[#FDECEC] text-[#B03A1A]"
+                ? "bg-[var(--teal-light)] text-[var(--teal-muted)]"
+                : "bg-[var(--coral-light)] text-[var(--coral)]"
             }`}
           >
             <span
@@ -113,7 +113,7 @@ export default function DashboardPage() {
                     href={`/portfolios/${p.portfolio_id}`}
                     className="flex items-center gap-4 px-5 py-3 hover:bg-[var(--content-bg)] transition-colors"
                   >
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--navy)] text-white text-xs font-bold">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--btn-navy)] text-white text-xs font-bold">
                       {(p.name ?? "P")[0]}
                     </div>
                     <div className="min-w-0 flex-1">

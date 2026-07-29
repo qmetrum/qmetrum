@@ -5,13 +5,14 @@ type Props = {
   size?: "sm" | "md";
 };
 
+// Theme-aware: these palette vars adapt in dark mode (see globals.css html.dark).
 const REGIME_STYLES: Record<string, { bg: string; text: string; label: string }> = {
-  Normal: { bg: "bg-[#E6F5F0]", text: "text-[#0A6B54]", label: "Normal" },
-  High_Fragility: { bg: "bg-[#FDECEC]", text: "text-[#B03A1A]", label: "High Fragility" },
-  High_Vol: { bg: "bg-[#FDECEC]", text: "text-[#B03A1A]", label: "High Volatility" },
-  Drawdown: { bg: "bg-[#FFF1E6]", text: "text-[#B5560B]", label: "Drawdown" },
-  Low_Vol: { bg: "bg-[#EAF2FB]", text: "text-[#1D5EA0]", label: "Low Vol Stable" },
-  Low_Vol_Stable: { bg: "bg-[#EAF2FB]", text: "text-[#1D5EA0]", label: "Low Vol Stable" },
+  Normal: { bg: "bg-[var(--teal-light)]", text: "text-[var(--teal-muted)]", label: "Normal" },
+  High_Fragility: { bg: "bg-[var(--coral-light)]", text: "text-[var(--coral)]", label: "High Fragility" },
+  High_Vol: { bg: "bg-[var(--coral-light)]", text: "text-[var(--coral)]", label: "High Volatility" },
+  Drawdown: { bg: "bg-[var(--amber-light)]", text: "text-[var(--amber)]", label: "Drawdown" },
+  Low_Vol: { bg: "bg-[var(--blue-light)]", text: "text-[var(--blue)]", label: "Low Vol Stable" },
+  Low_Vol_Stable: { bg: "bg-[var(--blue-light)]", text: "text-[var(--blue)]", label: "Low Vol Stable" },
 };
 
 export function RegimeBadge({ regime, size = "md" }: Props) {
