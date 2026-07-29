@@ -712,6 +712,47 @@ export const portfolioApi = {
     } = {},
   ) =>
     (await api.post<VarBacktestCompareResponse>(`/portfolios/${id}/var_backtest_compare`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
+
+  drawdownAllocation: async (
+    id: string | number,
+    payload: {
+      period?: string;
+      window?: number;
+      rebalance?: number;
+      cost_bps?: number;
+      alpha?: number;
+    } = {},
+  ) =>
+    (await api.post<DrawdownAllocationResponse>(`/portfolios/${id}/drawdown_allocation`, payload, { timeout: HEAVY_TIMEOUT_MS })).data,
+};
+
+export type AllocationMethodProfile = {
+  cagr: number;
+  ann_vol: number;
+  sharpe: number;
+  max_drawdown: number;
+  cdar95: number;
+  turnover_per_yr: number;
+};
+
+export type AllocationMethod = {
+  key: string;
+  label: string;
+  note: string;
+  weights: Record<string, number>;
+  profile?: AllocationMethodProfile | null;
+};
+
+export type DrawdownAllocationResponse = {
+  portfolio_id?: number;
+  as_of: string;
+  tickers: string[];
+  n_assets: number;
+  params: { window: number; rebalance: number; cost_bps: number; alpha: number };
+  data_window: { start: string; end: string; n_obs: number; years: number };
+  current_weights?: Record<string, number> | null;
+  methods: AllocationMethod[];
+  note: string;
 };
 
 export const forecastJobApi = {

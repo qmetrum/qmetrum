@@ -15,6 +15,7 @@ import { CreateAlertDialog } from "@/components/shared/CreateAlertDialog";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
 import { PortfolioCommentaryCard } from "@/components/shared/PortfolioCommentaryCard";
 import { VarBacktestCard } from "@/components/shared/VarBacktestCard";
+import { DrawdownAllocationCard } from "@/components/shared/DrawdownAllocationCard";
 import { ClientQADrawer } from "@/components/shared/ClientQADrawer";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
@@ -235,7 +236,7 @@ export default function PortfolioDetailPage() {
 
 
       {/* Metric cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
         <MetricCard
           label="Sharpe Ratio"
           value={loading ? "..." : n(perf.sharpe_ratio ?? risk.sharpe_ratio).toFixed(2)}
@@ -254,6 +255,12 @@ export default function PortfolioDetailPage() {
         <MetricCard
           label="Max Drawdown"
           value={loading ? "..." : `${(n(perf.max_drawdown ?? risk.max_drawdown) * 100).toFixed(1)}%`}
+          color="coral"
+        />
+        <MetricCard
+          label="CDaR (95%)"
+          value={loading ? "..." : `${(n(perf.cdar_95 ?? risk.cdar_95) * 100).toFixed(1)}%`}
+          sub="Avg drawdown, worst 5% of days"
           color="coral"
         />
         <MetricCard
@@ -848,6 +855,22 @@ export default function PortfolioDetailPage() {
 
       {/* VaR 95 backtest (Kupiec / Christoffersen coverage) */}
       <VarBacktestCard portfolioId={id} />
+
+      {/* Drawdown-managed allocation: method comparison + apply weights */}
+      <DrawdownAllocationCard
+        portfolioId={id}
+        onApply={async (weights) => {
+          const base = portfolio?.assets ?? [];
+          if (base.length === 0) return;
+          const merged = base.map((a) => ({
+            ...a,
+            weight: weights[a.ticker] ?? a.weight ?? 0,
+          }));
+          await portfolioApi.update(id, { name: portfolio!.name, assets: merged });
+          queryClient.invalidateQueries({ queryKey: ["portfolio", id] });
+          queryClient.invalidateQueries({ queryKey: ["portfolio-forecast", id] });
+        }}
+      />
 
       <AlertRulesList
         tickers={(portfolio?.assets ?? []).map((a) => a.ticker.toUpperCase())}

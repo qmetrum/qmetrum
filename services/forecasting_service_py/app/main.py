@@ -36,7 +36,10 @@ from app.logic.var_backtest_runner import (
     run_portfolio_var_backtest,
     run_portfolio_var_backtest_comparison,
     effective_weight_mode,
+    _fetch_data_map,
+    _price_frame,
 )
+from app.logic.drawdown_allocation import compute_drawdown_allocation
 # Updated Imports (News + Database)
 from app.utils.data_fetcher import fetch_news
 from app.services.market_store import get_price_series_cached, get_fundamentals_cached
@@ -373,6 +376,15 @@ class VarBacktestCompareRequest(BaseModel):
     n_simulations: int = 400
     random_seed: Optional[int] = 42
     weight_mode: str = "constant"  # "constant" | "drift"
+
+
+class DrawdownAllocationRequest(BaseModel):
+    assets: Optional[List[dict]] = None
+    period: str = "5y"
+    window: int = 252
+    rebalance: int = 21
+    cost_bps: float = 10.0
+    alpha: float = 0.95
 
 
 class QuantumBenchmarkRequest(BaseModel):
@@ -4126,6 +4138,66 @@ def var_backtest_compare_portfolio(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"VaR backtest comparison failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/portfolios/{portfolio_id}/drawdown_allocation")
+def drawdown_allocation_portfolio(
+    portfolio_id: str,
+    payload: DrawdownAllocationRequest,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Suggested portfolio weights from several risk-based methods (equal,
+    inverse-vol, risk-parity, drawdown-managed CDaR), each with its HONEST
+    walk-forward backtested profile (Sharpe, max-drawdown, CDaR, turnover) so
+    the advisor can choose with the tradeoff visible. The drawdown-managed
+    method targets lower drawdown, NOT higher return."""
+    try:
+        pid = _parse_portfolio_id(portfolio_id)
+        assets = payload.assets or []
+        with Session(engine) as session:
+            user = _require_user(session, user_id, x_user_id)
+            portfolio = session.exec(
+                select(Portfolio).where(Portfolio.id == pid).where(Portfolio.user_id == user.id)
+            ).first()
+            if not portfolio:
+                raise HTTPException(status_code=404, detail="Portfolio not found")
+            if not assets:
+                positions = session.exec(
+                    select(Position).where(Position.portfolio_id == pid)
+                ).all()
+                assets = [{"ticker": p.ticker, "weight": p.weight} for p in positions]
+
+        assets = _normalize_assets(assets)
+        if len(assets) < 2:
+            raise HTTPException(status_code=400, detail="need >= 2 holdings")
+
+        tickers = [a["ticker"] for a in assets]
+        current_weights = {a["ticker"]: float(a.get("weight") or 0.0) for a in assets}
+        data_map = _fetch_data_map(tickers, period=str(payload.period))
+        frame = _price_frame(data_map, [t for t in tickers if t in data_map])
+        if frame.empty or frame.shape[1] < 2:
+            raise HTTPException(status_code=400,
+                                detail="not enough overlapping price history for these holdings")
+
+        result = compute_drawdown_allocation(
+            frame,
+            current_weights=current_weights,
+            window=int(payload.window),
+            rebalance=int(payload.rebalance),
+            cost_bps=float(payload.cost_bps),
+            alpha=float(payload.alpha),
+        )
+        result = _json_compatible(result)
+        result["portfolio_id"] = pid
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Drawdown allocation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

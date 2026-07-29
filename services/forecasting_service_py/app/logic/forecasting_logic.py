@@ -325,6 +325,7 @@ class HybridForecaster:
                 "annualized_volatility": 0.0,
                 "cvar_95": 0.0,
                 "cvar_99": 0.0,
+                "cdar_95": 0.0,
             }
             ret = (
                 pd.Series(prices, dtype=float)
@@ -365,6 +366,17 @@ class HybridForecaster:
             max_drawdown = float(drawdown.min()) if len(drawdown) else 0.0
             calmar = float(annualized_return / abs(max_drawdown)) if max_drawdown < 0 else 0.0
 
+            # Conditional Drawdown at Risk (95%): the AVERAGE drawdown across the
+            # worst 5% of days -- a tail-risk companion to Max Drawdown (a single
+            # worst point) and to CVaR (a return, not a drawdown). Negative, like
+            # max_drawdown. Descriptive risk metric only; not a forecast.
+            if len(drawdown):
+                dd_q05 = float(np.percentile(drawdown, 5))
+                dd_tail = drawdown[drawdown <= dd_q05]
+                cdar_95 = float(dd_tail.mean()) if len(dd_tail) else max_drawdown
+            else:
+                cdar_95 = 0.0
+
             var_95 = float(np.percentile(ret, 5))
             var_99 = float(np.percentile(ret, 1))
             tail_95 = ret[ret <= var_95]
@@ -383,6 +395,7 @@ class HybridForecaster:
                 "annualized_volatility": annualized_volatility,
                 "cvar_95": cvar_95,
                 "cvar_99": cvar_99,
+                "cdar_95": cdar_95,
             }
         except Exception:
             return {
@@ -396,6 +409,7 @@ class HybridForecaster:
                 "annualized_volatility": 0.0,
                 "cvar_95": 0.0,
                 "cvar_99": 0.0,
+                "cdar_95": 0.0,
             }
 
     # --- NEW: TECHNICAL INDICATOR CALCULATOR ---

@@ -15,6 +15,7 @@ import {
 } from "@/lib/api";
 import { portfolioListApi } from "@/lib/api";
 import { useSavedAssets } from "@/lib/savedAssets";
+import { formatApiDate } from "@/lib/datetime";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { RegimeBadge } from "@/components/shared/RegimeBadge";
 import { CreateAlertDialog } from "@/components/shared/CreateAlertDialog";
@@ -379,7 +380,7 @@ export default function AssetDetailPage() {
       {tab === "Forecast & Risk" && (
         <div className="space-y-6">
           {/* Risk KPI row */}
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
             <MetricCard
               label="Sharpe Ratio"
               value={fmt(perfMetrics?.sharpe_ratio as number)}
@@ -398,6 +399,12 @@ export default function AssetDetailPage() {
             <MetricCard
               label="Max Drawdown"
               value={pct(perfMetrics?.max_drawdown as number)}
+              color="coral"
+            />
+            <MetricCard
+              label="CDaR (95%)"
+              value={pct(perfMetrics?.cdar_95 as number)}
+              sub="Avg drawdown, worst 5% of days"
               color="coral"
             />
             <MetricCard
@@ -770,7 +777,7 @@ export default function AssetDetailPage() {
                 <div className="flex items-center gap-3 mt-2 text-xs text-[var(--text-muted)]">
                   {item.publisher && <span>{item.publisher}</span>}
                   {item.timestamp && (
-                    <span>{new Date(item.timestamp).toLocaleDateString()}</span>
+                    <span>{formatApiDate(item.timestamp)}</span>
                   )}
                   {item.type && (
                     <span className="rounded bg-[var(--content-bg)] px-2 py-0.5">{item.type}</span>
