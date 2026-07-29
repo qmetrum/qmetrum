@@ -458,6 +458,17 @@ export default function ScenariosPage() {
   // selected portfolio. Before a run it falls back to a knob-based estimate.
   const specByName = new Map(scenarios.map((s) => [s.name, s]));
   const simulated = fanResults != null;
+  // Which scenarios the user has hidden from the comparison chart / tiles.
+  const [excludedKeys, setExcludedKeys] = useState<Set<string>>(new Set());
+  function toggleExcluded(key: string) {
+    setExcludedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
   const comparisonData = simulated
     ? Object.entries(fanResults)
         .filter(
@@ -496,6 +507,8 @@ export default function ScenariosPage() {
           color: s.color,
         };
       });
+
+  const shownComparison = comparisonData.filter((c) => !excludedKeys.has(c.key));
 
   return (
     <div className="space-y-6">
@@ -831,27 +844,59 @@ export default function ScenariosPage() {
             <h2 className="text-sm font-semibold text-[var(--text-primary)] mb-1">
               Scenario Comparison — Portfolio Impact
             </h2>
-            <p className="text-[10px] text-[var(--text-muted)] mb-3">
+            <p className="text-[10px] text-[var(--text-muted)] mb-2">
               {simulated
                 ? "Simulated: median (p50) end level per scenario vs the base scenario's start, from the MPS-copula paths for the selected portfolio."
                 : "Estimated from scenario knobs only — run scenarios to get simulated results for the selected portfolio."}
             </p>
-            <ResponsiveContainer width="100%" height={300}>
-              <BarChart data={comparisonData} layout="vertical" margin={{ left: 100, right: 40 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
-                <XAxis type="number" tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v > 0 ? "+" : ""}${v}%`} />
-                <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#5A6270" }} width={95} />
-                <Tooltip
-                  contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
-                  formatter={(value) => [`${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(1)}%`, "Return"]}
-                />
-                <Bar dataKey="return" radius={[0, 4, 4, 0]}>
-                  {comparisonData.map((entry, i) => (
-                    <Cell key={i} fill={entry.color} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {/* Include/exclude scenarios from the chart and tiles */}
+            {comparisonData.length > 0 && (
+              <div className="mb-3 flex flex-wrap gap-1.5">
+                {comparisonData.map((c) => {
+                  const on = !excludedKeys.has(c.key);
+                  return (
+                    <button
+                      key={c.key}
+                      onClick={() => toggleExcluded(c.key)}
+                      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[10px] transition-colors ${
+                        on
+                          ? "border-[var(--border)] text-[var(--text-primary)]"
+                          : "border-transparent bg-[var(--content-bg)] text-[var(--text-muted)] line-through"
+                      }`}
+                      title={on ? "Click to hide from the chart" : "Click to show"}
+                    >
+                      <span
+                        className="h-2 w-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: on ? c.color : "var(--text-muted)" }}
+                      />
+                      {c.name}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+            {shownComparison.length === 0 ? (
+              <div className="py-16 text-center text-xs text-[var(--text-muted)]">
+                All scenarios hidden. Click a chip above to show them.
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={Math.max(180, shownComparison.length * 44)}>
+                <BarChart data={shownComparison} layout="vertical" margin={{ left: 100, right: 40 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
+                  <XAxis type="number" tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v > 0 ? "+" : ""}${v}%`} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#5A6270" }} width={95} />
+                  <Tooltip
+                    contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
+                    formatter={(value) => [`${Number(value) > 0 ? "+" : ""}${Number(value).toFixed(1)}%`, "Return"]}
+                  />
+                  <Bar dataKey="return" radius={[0, 4, 4, 0]}>
+                    {shownComparison.map((entry, i) => (
+                      <Cell key={i} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
 
           {/* MPS-copula scenario path fans */}
@@ -922,7 +967,7 @@ export default function ScenariosPage() {
                 : "Knob-based estimate × portfolio value — run scenarios to simulate."}
             </p>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {comparisonData.map((s, i) => (
+              {shownComparison.map((s, i) => (
                 <div key={`${s.name}-${i}`} className="rounded-lg bg-[var(--content-bg)] px-4 py-3">
                   <span className="text-xs font-semibold text-[var(--text-muted)]">{s.name}</span>
                   <div className={`text-lg font-bold ${s.dollarImpact >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}>
