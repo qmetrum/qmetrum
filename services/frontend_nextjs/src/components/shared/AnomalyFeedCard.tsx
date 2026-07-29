@@ -8,6 +8,7 @@ import {
   type AlertRating,
   type QpulseEventPayload,
 } from "@/lib/api";
+import { timeAgo } from "@/lib/datetime";
 
 type Props = {
   limit?: number;
@@ -37,18 +38,8 @@ function SeverityBadge({ severity }: { severity?: string | null }) {
 }
 
 function relativeTime(iso: string): string {
-  // The API serialises evaluated_at from datetime.utcnow() with no timezone
-  // designator, which JS would otherwise parse as LOCAL time — making every age
-  // wrong by the viewer's UTC offset.
-  const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(iso);
-  const then = new Date(hasZone ? iso : `${iso}Z`).getTime();
-  if (Number.isNaN(then)) return "unknown";
-  const mins = Math.round((Date.now() - then) / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
+  // timeAgo treats a zone-less API timestamp as UTC; see lib/datetime.ts.
+  return timeAgo(iso) || "unknown";
 }
 
 // Feeds that do not carry real market data. An alert from one of these must not

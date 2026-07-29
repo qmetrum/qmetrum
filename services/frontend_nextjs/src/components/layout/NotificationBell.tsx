@@ -4,20 +4,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { alertApi, type AlertEventResponse } from "@/lib/api";
+import { apiDateMs, timeAgo } from "@/lib/datetime";
 
 const SEEN_KEY = "qsight.alerts.lastSeen";
-
-function timeAgo(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "";
-  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
 
 function humanizeType(t: string): string {
   return ({
@@ -69,7 +58,7 @@ export function NotificationBell({ enabled }: { enabled: boolean }) {
 
   const events = useMemo(() => (data?.items ?? []).filter((e) => e.triggered), [data]);
   const unread = useMemo(
-    () => events.filter((e) => new Date(e.evaluated_at).getTime() > lastSeen).length,
+    () => events.filter((e) => (apiDateMs(e.evaluated_at) ?? 0) > lastSeen).length,
     [events, lastSeen],
   );
 
@@ -78,7 +67,7 @@ export function NotificationBell({ enabled }: { enabled: boolean }) {
     setOpen(next);
     if (next && events.length > 0) {
       // Opening marks everything currently shown as seen.
-      const newest = Math.max(...events.map((e) => new Date(e.evaluated_at).getTime()));
+      const newest = Math.max(...events.map((e) => apiDateMs(e.evaluated_at) ?? 0));
       setLastSeen(newest);
       try {
         window.localStorage.setItem(SEEN_KEY, String(newest));

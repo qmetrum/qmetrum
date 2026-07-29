@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useState } from "react";
 import { portfolioListApi, portfolioApi, type PortfolioResponse } from "@/lib/api";
+import { formatApiDate } from "@/lib/datetime";
 
 export default function PortfoliosPage() {
   const qc = useQueryClient();
@@ -65,7 +66,7 @@ export default function PortfoliosPage() {
                   </td>
                   <td className="px-5 py-3 text-[var(--text-secondary)]">{(p.assets ?? []).length} assets</td>
                   <td className="px-5 py-3 text-[var(--text-muted)]">
-                    {p.updated_at ? new Date(p.updated_at).toLocaleDateString() : "\u2014"}
+                    {formatApiDate(p.updated_at)}
                   </td>
                   <td className="px-5 py-3 text-right">
                     <div className="flex items-center justify-end gap-3">

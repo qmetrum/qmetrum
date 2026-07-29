@@ -3,19 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { alertApi, type AlertEventResponse } from "@/lib/api";
+import { timeAgo } from "@/lib/datetime";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
-
-function timeAgo(iso: string): string {
-  const then = new Date(iso).getTime();
-  if (!Number.isFinite(then)) return "";
-  const s = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
 
 function humanizeType(t: string): string {
   return (

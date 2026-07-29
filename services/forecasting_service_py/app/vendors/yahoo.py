@@ -121,7 +121,10 @@ class YahooFinanceVendor:
                     date_str = pub_date[:16].replace("T", " ")
                 else:
                     ts = n.get("providerPublishTime", 0)
-                    date_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
+                    # utcfromtimestamp, not fromtimestamp: every naive timestamp this
+                    # API emits is UTC, and the frontend parses them as such. Using
+                    # server-local time here would shift these items by the host offset.
+                    date_str = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if ts else ""
                 content_type = content.get("contentType", n.get("type", "STORY"))
                 cleaned.append({
                     "title": title,

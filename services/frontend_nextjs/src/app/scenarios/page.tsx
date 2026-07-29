@@ -24,6 +24,7 @@ import {
 import { ScenarioExplainerCard, buildScenarioItems } from "@/components/shared/ScenarioExplainerCard";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
+import { formatApiDate } from "@/lib/datetime";
 import {
   ResponsiveContainer,
   BarChart,
@@ -563,7 +564,7 @@ export default function ScenariosPage() {
                         <span className="block truncate text-sm font-medium text-[var(--navy)]">{s.name}</span>
                         <span className="block text-[10px] text-[var(--text-muted)]">
                           {s.n_scenarios} scenarios{s.has_results ? " · results saved" : ""}
-                          {s.updated_at ? ` · ${new Date(s.updated_at).toLocaleDateString()}` : ""}
+                          {s.updated_at ? ` · ${formatApiDate(s.updated_at)}` : ""}
                         </span>
                       </button>
                       <button
