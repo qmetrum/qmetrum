@@ -22,7 +22,9 @@ function num(x: number | null | undefined, digits = 2) {
 
 export function DrawdownAllocationCard({ portfolioId, onApply }: Props) {
   const [selected, setSelected] = useState("drawdown_mgd");
-  const [applied, setApplied] = useState(false);
+  const [apply, setApply] = useState<{ status: "idle" | "applying" | "done" | "error"; msg?: string }>({
+    status: "idle",
+  });
 
   const run = useMutation({
     mutationFn: () => portfolioApi.drawdownAllocation(portfolioId, { period: "5y" }),
@@ -45,7 +47,7 @@ export function DrawdownAllocationCard({ portfolioId, onApply }: Props) {
           </p>
         </div>
         <button
-          onClick={() => { setApplied(false); run.mutate(); }}
+          onClick={() => { setApply({ status: "idle" }); run.mutate(); }}
           disabled={run.isPending}
           className="rounded-lg bg-[var(--teal)] px-4 py-2 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
         >
@@ -111,7 +113,7 @@ export function DrawdownAllocationCard({ portfolioId, onApply }: Props) {
                   return (
                     <tr
                       key={m.key}
-                      onClick={() => { setSelected(m.key); setApplied(false); }}
+                      onClick={() => { setSelected(m.key); setApply({ status: "idle" }); }}
                       className={`cursor-pointer border-t border-[var(--card-border)] transition-colors ${
                         isSel ? "bg-[var(--teal-light)]" : "hover:bg-[var(--content-bg)]"
                       }`}
@@ -140,15 +142,39 @@ export function DrawdownAllocationCard({ portfolioId, onApply }: Props) {
                 {onApply && (
                   <button
                     onClick={async () => {
-                      await onApply(selMethod.weights, selMethod.label);
-                      setApplied(true);
+                      setApply({ status: "applying" });
+                      try {
+                        await onApply(selMethod.weights, selMethod.label);
+                        setApply({ status: "done", msg: `${selMethod.label} weights saved as the portfolio's targets` });
+                      } catch (e) {
+                        setApply({
+                          status: "error",
+                          msg: (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+                            ?? "Failed to apply — the portfolio was not changed.",
+                        });
+                      }
                     }}
-                    className="rounded-lg border border-[var(--teal)] px-3 py-1.5 text-xs font-semibold text-[var(--teal-muted)] hover:bg-[var(--teal-light)]"
+                    disabled={apply.status === "applying"}
+                    className="rounded-lg border border-[var(--teal)] px-3 py-1.5 text-xs font-semibold text-[var(--teal-muted)] hover:bg-[var(--teal-light)] disabled:opacity-50"
                   >
-                    {applied ? "Applied ✓" : "Apply these weights"}
+                    {apply.status === "applying" ? "Applying…" : apply.status === "done" ? "Applied ✓" : "Apply these weights"}
                   </button>
                 )}
               </div>
+              {onApply && apply.status !== "done" && apply.status !== "error" && (
+                <p className="text-[10px] text-[var(--text-muted)]">
+                  Applying saves these as the portfolio&apos;s <span className="font-semibold">target weights</span> (updates the
+                  holdings and risk metrics above) — it does not place any trades.
+                </p>
+              )}
+              {apply.status === "done" && (
+                <p className="text-[11px] font-medium text-[var(--positive)]">
+                  ✓ {apply.msg}. The holdings table and risk metrics above have refreshed.
+                </p>
+              )}
+              {apply.status === "error" && (
+                <p className="text-[11px] font-medium text-[var(--coral)]">{apply.msg}</p>
+              )}
               <p className="text-[11px] leading-relaxed text-[var(--text-secondary)]">{selMethod.note}</p>
 
               <div className="overflow-x-auto">
