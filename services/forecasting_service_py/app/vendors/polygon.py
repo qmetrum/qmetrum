@@ -52,7 +52,14 @@ class PolygonVendor:
 
             results = []
             for bar in aggs:
-                date_str = datetime.fromtimestamp(bar.timestamp / 1000).strftime("%Y-%m-%d")
+                # bar.timestamp is the start of the aggregate window in Unix ms:
+                # midnight ET for US equities, midnight UTC for crypto. Bucketing
+                # that into a date with fromtimestamp() would resolve it against the
+                # HOST's timezone, silently shifting every bar to the previous day on
+                # any host west of UTC — the whole price history off by one session,
+                # which is invisible until it corrupts a forecast. utcfromtimestamp
+                # keeps the date host-independent.
+                date_str = datetime.utcfromtimestamp(bar.timestamp / 1000).strftime("%Y-%m-%d")
                 results.append({
                     "date": date_str,
                     "price": float(bar.close),
