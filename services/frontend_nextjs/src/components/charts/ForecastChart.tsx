@@ -61,12 +61,15 @@ export function ForecastChart({
 
   // Forecast segment
   for (let i = 0; i < fcLen; i++) {
+    const lo = lowerBound?.[i] ?? null;
+    const up = upperBound?.[i] ?? null;
     data.push({
       date: forecastDates[i],
       history: null,
       forecast: forecastPrices[i],
-      lower: lowerBound?.[i] ?? null,
-      upper: upperBound?.[i] ?? null,
+      lower: lo,
+      upper: up,
+      band: lo != null && up != null ? [lo, up] : null,   // range area (no white mask)
     });
   }
 
@@ -105,32 +108,24 @@ export function ForecastChart({
           contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
           labelFormatter={(v) => new Date(v as string).toLocaleDateString()}
           formatter={(value, name) => {
-            const labels: Record<string, string> = {
-              history: "Historical",
-              forecast: "Forecast",
-              upper: "95% Upper",
-              lower: "95% Lower",
-            };
             const key = String(name ?? "");
+            if (key === "band" && Array.isArray(value)) {
+              const [lo, up] = value as number[];
+              return [`${Number(lo).toFixed(2)} – ${Number(up).toFixed(2)}`, "95% CI"];
+            }
+            const labels: Record<string, string> = { history: "Historical", forecast: "Forecast" };
             const formatted = typeof value === "number" ? value.toFixed(2) : String(value ?? "");
             return [formatted, labels[key] ?? key];
           }}
         />
 
-        {/* 95% confidence band (shaded area between lower and upper) */}
+        {/* 95% confidence band: a single range area between lower and upper.
+            No white-mask trick, so it renders correctly on dark backgrounds. */}
         <Area
-          dataKey="upper"
+          dataKey="band"
           stroke="none"
           fill="#0F8B6E"
-          fillOpacity={0.1}
-          isAnimationActive={false}
-          connectNulls={false}
-        />
-        <Area
-          dataKey="lower"
-          stroke="none"
-          fill="#FFFFFF"
-          fillOpacity={1}
+          fillOpacity={0.15}
           isAnimationActive={false}
           connectNulls={false}
         />

@@ -151,8 +151,7 @@ html.dark .recharts-text,
 html.dark .recharts-label { fill: var(--text-secondary); }
 html.dark .recharts-cartesian-grid line,
 html.dark .recharts-cartesian-axis-line,
-html.dark .recharts-cartesian-axis-tick-line,
-html.dark .recharts-reference-line line { stroke: var(--card-border); }
+html.dark .recharts-cartesian-axis-tick-line { stroke: var(--card-border); }
 html.dark .recharts-legend-item-text { color: var(--text-secondary) !important; }
 
 /* Dark theme: recolor chart SERIES that are drawn in near-black brand hexes
