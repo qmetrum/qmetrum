@@ -355,6 +355,21 @@ class SavedScreen(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class ScenarioSession(SQLModel, table=True):
+    """A saved Scenario Builder session: the scenario set plus the results it
+    produced, so a user can reload a full session after logging back in (even
+    on another device)."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    name: str
+    portfolio_id: Optional[str] = Field(default=None)
+    portfolio_value: Optional[float] = Field(default=None)
+    scenarios: dict = Field(default_factory=dict, sa_column=Column(JSON))  # {items: [...]}
+    results: dict = Field(default_factory=dict, sa_column=Column(JSON))    # fans, dates, comparison
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class IntraDayQuote(SQLModel, table=True):
     """One row per symbol, upserted on morning refresh."""
     symbol: str = Field(primary_key=True, foreign_key="asset.symbol")

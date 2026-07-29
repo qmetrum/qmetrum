@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useBranding } from "@/components/providers/BrandingProvider";
 import {
   agentsApi,
@@ -9,6 +9,7 @@ import {
   portfolioApi,
   portfolioListApi,
   reportsApi,
+  scenarioSessionApi,
   type PortfolioResponse,
   type ForecastScenarioInput,
   type ScenarioFan,
@@ -49,6 +50,11 @@ type ScenarioSpec = { name: string; shock: number; volScale: number; drift: numb
 // across refreshes. Scenario definitions are shock specs independent of any
 // portfolio, so one global list is correct.
 const SCENARIOS_KEY = "qsight.scenarios.v1";
+// A run's produced results, and any in-progress job, persist locally so leaving
+// and returning to the page (or a refresh) restores the charts and resumes a
+// running computation.
+const RUN_KEY = "qsight.scenarioRun.v1";
+const JOB_KEY = "qsight.scenarioJob.v1";
 
 const CUSTOM_COLORS = [
   "#7C5CBF", // purple
@@ -125,6 +131,51 @@ export default function ScenariosPage() {
     }
   }, [scenarios]);
 
+  // Restore a previous run's results (and resume any in-progress job) on mount,
+  // so leaving and returning to the page shows the charts / "still computing".
+  const runLoaded = useRef(false);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(RUN_KEY);
+      if (raw) {
+        const s = JSON.parse(raw);
+        if (s.portfolio) setSelectedPortfolio(s.portfolio);
+        if (typeof s.portfolioValue === "number") setPortfolioValue(s.portfolioValue);
+        if (s.results) setResults(s.results);
+        if (s.fanResults) setFanResults(s.fanResults);
+        if (Array.isArray(s.forecastDates)) setForecastDates(s.forecastDates);
+        if (typeof s.runHadBuiltins === "boolean") setRunHadBuiltins(s.runHadBuiltins);
+        if (typeof s.runId === "number") setRunId(s.runId);
+      }
+    } catch { /* ignore */ }
+    runLoaded.current = true;
+    try {
+      const jraw = window.localStorage.getItem(JOB_KEY);
+      if (jraw) {
+        const jb = JSON.parse(jraw);
+        if (jb?.jobId) {
+          if (jb.portfolio) setSelectedPortfolio(jb.portfolio);
+          pollJob(jb.jobId, jb.t0 ?? Date.now(), jb.builtins ?? true);
+        }
+      }
+    } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Persist the produced results so a return/refresh restores them.
+  useEffect(() => {
+    if (!runLoaded.current) return;
+    try {
+      if (fanResults || results) {
+        window.localStorage.setItem(RUN_KEY, JSON.stringify({
+          portfolio: selectedPortfolio, portfolioValue, results, fanResults,
+          forecastDates, runHadBuiltins, runId,
+        }));
+      } else {
+        window.localStorage.removeItem(RUN_KEY);
+      }
+    } catch { /* ignore */ }
+  }, [results, fanResults, forecastDates, runHadBuiltins, selectedPortfolio, portfolioValue, runId]);
+
   const translateMutation = useMutation({
     mutationFn: (desc: string) => agentsApi.translateScenario(desc),
     onSuccess: (res) => {
@@ -162,8 +213,112 @@ export default function ScenariosPage() {
     queryFn: portfolioListApi.list,
   });
 
+  const writeJob = (v: unknown) => {
+    try { window.localStorage.setItem(JOB_KEY, JSON.stringify(v)); } catch { /* ignore */ }
+  };
+  const clearJob = () => {
+    try { window.localStorage.removeItem(JOB_KEY); } catch { /* ignore */ }
+  };
+
+  // Parse a portfolio forecast result into the chart state. Throws if empty.
+  function applyForecastResult(fc: unknown, builtinsAtRun: boolean) {
+    const summary = (fc as Record<string, unknown>)?.portfolio_summary as Record<string, unknown> | undefined;
+    const scenarioBlob = summary?.scenarios as Record<string, unknown> | undefined;
+    const scenarioLegacy = summary?.scenarios_legacy as Record<string, number[]> | undefined;
+    const dates = (summary?.forecast_dates as string[] | undefined) ?? [];
+    let flat: Record<string, number[]> | null = null;
+    const fans: Record<string, ScenarioFan> = {};
+    if (scenarioBlob && Object.keys(scenarioBlob).length > 0) {
+      flat = {};
+      for (const [name, val] of Object.entries(scenarioBlob)) {
+        if (name.startsWith("_")) continue; // skip audit fields like _mps
+        if (Array.isArray(val)) {
+          flat[name] = val as number[];
+          fans[name] = { central: val as number[] };
+        } else if (val && typeof val === "object" && Array.isArray((val as { central?: number[] }).central)) {
+          const f = val as ScenarioFan;
+          flat[name] = f.central;
+          fans[name] = f;
+        }
+      }
+    } else if (scenarioLegacy) {
+      for (const [name, arr] of Object.entries(scenarioLegacy)) {
+        fans[name] = { central: arr };
+      }
+    }
+    if (!flat && !scenarioLegacy && Object.keys(fans).length === 0) {
+      throw new Error("The forecast returned no scenario data");
+    }
+    setForecastDates(dates);
+    setResults(flat ?? scenarioLegacy ?? null);
+    setFanResults(Object.keys(fans).length > 0 ? fans : null);
+    setRunHadBuiltins(builtinsAtRun);
+    setRunId((n) => n + 1);
+  }
+
+  // Poll an async job to completion and apply its result. Reused for a fresh
+  // run and for resuming an in-progress job after navigation/refresh.
+  async function pollJob(jobId: string, t0: number, builtinsAtRun: boolean) {
+    setRunning(true);
+    setRunError(null);
+    setRunNotice(null);
+    let pollFails = 0;
+    try {
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000));
+        let j: Awaited<ReturnType<typeof forecastJobApi.get>>;
+        try {
+          j = await forecastJobApi.get(jobId);
+          pollFails = 0;
+        } catch {
+          // Transient blip: tolerate a few; keep the job marker so a later
+          // remount can resume rather than losing a healthy computation.
+          if (++pollFails < 8) continue;
+          setRunNotice("Lost the connection while your scenarios were computing. The job keeps running on the server; reopen this page shortly to pick up the result.");
+          setRunning(false);
+          return;
+        }
+        setRunProgress({
+          elapsed: Math.round((Date.now() - t0) / 1000),
+          progress: typeof j.job?.progress === "number" ? j.job.progress : null,
+        });
+        if (j.job?.status === "completed") {
+          try {
+            applyForecastResult(j.result ?? {}, builtinsAtRun);
+          } catch (e) {
+            setRunError((e as Error).message ?? "Scenario run returned no data");
+          }
+          clearJob();
+          setRunning(false);
+          setRunProgress(null);
+          return;
+        }
+        if (j.job?.status === "failed") {
+          setRunError(j.job?.error_message || j.error || "Scenario computation failed on the server");
+          clearJob();
+          setRunning(false);
+          return;
+        }
+        // Long-running is NOT an error: the job keeps computing server-side and
+        // caches its result. Stop watching but KEEP the job marker so returning
+        // to the page resumes it.
+        if (Date.now() - t0 > 45 * 60_000) {
+          setRunNotice("This is taking longer than usual, so we have stopped watching here. The calculation keeps running on the server; reopen this page in a few minutes to pick up the result.");
+          setRunning(false);
+          setRunProgress(null);
+          return;
+        }
+      }
+    } catch (e) {
+      setRunError((e as Error).message ?? "Scenario run failed");
+      setRunning(false);
+      setRunProgress(null);
+    }
+  }
+
   async function runScenarios() {
     if (!selectedPortfolio) return;
+    const builtinsAtRun = includeBuiltins;
     setRunning(true);
     setRunError(null);
     setRunNotice(null);
@@ -176,103 +331,86 @@ export default function ScenariosPage() {
         return_scale: s.volScale,
         drift_shift: s.drift,
       }));
-      // Submit as an async job: cold computes can take many minutes (per-asset
-      // retraining), far beyond any sane HTTP timeout. The job queue also
-      // dedups by request hash, so a retry click re-attaches to the running
-      // job instead of stacking another compute.
-      let res = await portfolioApi.forecast(
+      // Async job: cold computes take many minutes; the queue dedups by request
+      // hash so a re-run re-attaches instead of stacking another compute.
+      const res = await portfolioApi.forecast(
         selectedPortfolio,
         { horizon_days: 90, scenarios: scenarioInputs, include_builtin_scenarios: includeBuiltins },
         { async_mode: true }
       );
       if (res.mode === "job" && res.job_id) {
-        const jobId = res.job_id;
-        let pollFails = 0;
-        for (;;) {
-          await new Promise((r) => setTimeout(r, 3000));
-          let j: Awaited<ReturnType<typeof forecastJobApi.get>>;
-          try {
-            j = await forecastJobApi.get(jobId);
-            pollFails = 0; // recovered
-          } catch {
-            // A transient network blip must not kill a healthy job. Tolerate a
-            // few in a row; only give up (gracefully) if polling is truly lost.
-            if (++pollFails < 8) continue;
-            setRunNotice(
-              "Lost the connection while your scenarios were computing. The job keeps running on the server; click Run again shortly to pick up the result.",
-            );
-            return;
-          }
-          setRunProgress({
-            elapsed: Math.round((Date.now() - t0) / 1000),
-            progress: typeof j.job?.progress === "number" ? j.job.progress : null,
-          });
-          if (j.job?.status === "completed") {
-            res = { mode: "job", result: j.result ?? null };
-            break;
-          }
-          if (j.job?.status === "failed") {
-            throw new Error(j.job?.error_message || j.error || "Scenario computation failed on the server");
-          }
-          // Taking a long time is NOT an error: the job keeps running
-          // server-side (the backend reaps genuine orphans on restart) and its
-          // result is cached. Stop watching and invite the user back, rather
-          // than throwing a red error on a perfectly healthy computation.
-          if (Date.now() - t0 > 45 * 60_000) {
-            setRunNotice(
-              "This is taking longer than usual, so we have stopped watching here. The calculation keeps running on the server and the result is saved. Come back in a few minutes and click Run again: it will load instantly from the cache.",
-            );
-            return;
-          }
-        }
+        writeJob({ jobId: res.job_id, t0, portfolio: selectedPortfolio, builtins: builtinsAtRun });
+        await pollJob(res.job_id, t0, builtinsAtRun);
+      } else {
+        applyForecastResult(res.result ?? res, builtinsAtRun);
+        setRunning(false);
       }
-      const fc = res?.result ?? res;
-      const summary = (fc as Record<string, unknown>)?.portfolio_summary as Record<string, unknown> | undefined;
-      // Prefer the new fan shape's `central` path when present; fall back to the
-      // legacy flat-array emission for backward compatibility.
-      const scenarioBlob = summary?.scenarios as Record<string, unknown> | undefined;
-      const scenarioLegacy = summary?.scenarios_legacy as Record<string, number[]> | undefined;
-      const dates = (summary?.forecast_dates as string[] | undefined) ?? [];
-      setForecastDates(dates);
-      let flat: Record<string, number[]> | null = null;
-      const fans: Record<string, ScenarioFan> = {};
-      if (scenarioBlob && Object.keys(scenarioBlob).length > 0) {
-        flat = {};
-        for (const [name, val] of Object.entries(scenarioBlob)) {
-          if (name.startsWith("_")) continue; // skip audit fields like _mps
-          if (Array.isArray(val)) {
-            flat[name] = val as number[];
-            fans[name] = { central: val as number[] };
-          } else if (val && typeof val === "object" && Array.isArray((val as { central?: number[] }).central)) {
-            const f = val as ScenarioFan;
-            flat[name] = f.central;
-            fans[name] = f;
-          }
-        }
-      } else if (scenarioLegacy) {
-        for (const [name, arr] of Object.entries(scenarioLegacy)) {
-          fans[name] = { central: arr };
-        }
-      }
-      if (!flat && !scenarioLegacy && Object.keys(fans).length === 0) {
-        throw new Error("The forecast returned no scenario data");
-      }
-      setResults(flat ?? scenarioLegacy ?? null);
-      setFanResults(Object.keys(fans).length > 0 ? fans : null);
-      setRunHadBuiltins(includeBuiltins);
-      setRunId((n) => n + 1);
     } catch (e) {
-      // Never fail silently: stale results with no explanation are worse than
-      // an honest error.
       const err = e as { response?: { data?: { detail?: unknown } }; message?: string };
       const detail = err.response?.data?.detail;
-      setRunError(
-        typeof detail === "string" ? detail : err.message ?? "Scenario run failed",
-      );
-    } finally {
+      setRunError(typeof detail === "string" ? detail : err.message ?? "Scenario run failed");
       setRunning(false);
       setRunProgress(null);
     }
+  }
+
+  // ── Saved scenario sessions (server-side; survive logout/login) ──
+  const qc = useQueryClient();
+  const [showSessions, setShowSessions] = useState(false);
+  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const { data: sessions } = useQuery({
+    queryKey: ["scenario-sessions"],
+    queryFn: scenarioSessionApi.list,
+  });
+  const saveSession = useMutation({
+    mutationFn: (name: string) =>
+      scenarioSessionApi.save({
+        name,
+        portfolio_id: selectedPortfolio || null,
+        portfolio_value: portfolioValue,
+        scenarios: { items: scenarios },
+        results: { results, fanResults, forecastDates, runHadBuiltins },
+      }),
+    onSuccess: (s) => {
+      qc.invalidateQueries({ queryKey: ["scenario-sessions"] });
+      setSavedMsg(`Saved “${s.name}”.`);
+      setTimeout(() => setSavedMsg(null), 4000);
+    },
+  });
+  const deleteSession = useMutation({
+    mutationFn: (id: number) => scenarioSessionApi.remove(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["scenario-sessions"] }),
+  });
+
+  async function loadSession(id: number) {
+    try {
+      const s = await scenarioSessionApi.get(id);
+      const items = ((s.scenarios as { items?: typeof scenarios })?.items) ?? [];
+      if (items.length) setScenarios(items);
+      if (s.portfolio_id) setSelectedPortfolio(s.portfolio_id);
+      if (typeof s.portfolio_value === "number") setPortfolioValue(s.portfolio_value);
+      const r = (s.results ?? {}) as {
+        results?: Record<string, number[]> | null;
+        fanResults?: Record<string, ScenarioFan> | null;
+        forecastDates?: string[];
+        runHadBuiltins?: boolean;
+      };
+      if (r.results || r.fanResults) {
+        setResults(r.results ?? null);
+        setFanResults(r.fanResults ?? null);
+        setForecastDates(r.forecastDates ?? []);
+        setRunHadBuiltins(r.runHadBuiltins ?? true);
+        setRunId((n) => n + 1);
+      }
+      setShowSessions(false);
+    } catch {
+      setRunError("Could not load that saved session.");
+    }
+  }
+
+  function onSaveSession() {
+    const name = window.prompt("Name this scenario session:", `Session ${new Date().toLocaleDateString()}`);
+    if (name && name.trim()) saveSession.mutate(name.trim());
   }
 
   function addCustom() {
@@ -361,12 +499,69 @@ export default function ScenariosPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-[var(--navy)]">Scenario Builder</h1>
-        <p className="text-sm text-[var(--text-secondary)]">
-          Model custom scenarios and stress-test portfolio outcomes
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-[var(--navy)]">Scenario Builder</h1>
+          <p className="text-sm text-[var(--text-secondary)]">
+            Model custom scenarios and stress-test portfolio outcomes
+          </p>
+        </div>
+        <div className="relative flex items-center gap-2">
+          <button
+            onClick={() => setShowSessions((v) => !v)}
+            className="rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium text-[var(--text-primary)] hover:bg-[var(--content-bg)] transition-colors"
+          >
+            Saved sessions{sessions && sessions.length > 0 ? ` (${sessions.length})` : ""}
+          </button>
+          <button
+            onClick={onSaveSession}
+            disabled={saveSession.isPending || (!results && !fanResults && scenarios.length === 0)}
+            className="rounded-lg bg-[var(--teal)] px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            title="Save this scenario set and its results to your account"
+          >
+            {saveSession.isPending ? "Saving…" : "Save session"}
+          </button>
+          {showSessions && (
+            <div className="absolute right-0 top-full z-40 mt-2 w-80 rounded-lg border border-[var(--border)] bg-white shadow-lg overflow-hidden">
+              <div className="border-b border-[var(--border)] px-4 py-2.5 text-sm font-semibold text-[var(--text-primary)]">
+                Saved sessions
+              </div>
+              {(sessions ?? []).length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-[var(--text-muted)]">
+                  No saved sessions yet. Run scenarios, then “Save session”.
+                </div>
+              ) : (
+                <ul className="max-h-80 overflow-y-auto">
+                  {(sessions ?? []).map((s) => (
+                    <li key={s.id} className="flex items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-2.5 last:border-b-0 hover:bg-[var(--content-bg)]">
+                      <button onClick={() => loadSession(s.id)} className="min-w-0 flex-1 text-left">
+                        <span className="block truncate text-sm font-medium text-[var(--navy)]">{s.name}</span>
+                        <span className="block text-[10px] text-[var(--text-muted)]">
+                          {s.n_scenarios} scenarios{s.has_results ? " · results saved" : ""}
+                          {s.updated_at ? ` · ${new Date(s.updated_at).toLocaleDateString()}` : ""}
+                        </span>
+                      </button>
+                      <button
+                        onClick={() => deleteSession.mutate(s.id)}
+                        className="shrink-0 text-[var(--text-muted)] hover:text-[var(--coral)]"
+                        title="Delete"
+                      >
+                        ✕
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
       </div>
+
+      {savedMsg && (
+        <div className="rounded-lg bg-[var(--teal-light)] px-4 py-2 text-sm text-[var(--text-primary)]">
+          {savedMsg}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Controls Panel */}

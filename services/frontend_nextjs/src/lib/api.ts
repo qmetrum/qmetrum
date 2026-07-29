@@ -583,6 +583,38 @@ export type ImportHolding = {
   weight: number;
 };
 
+export type ScenarioSessionSummary = {
+  id: number;
+  name: string;
+  portfolio_id: string | null;
+  portfolio_value: number | null;
+  n_scenarios: number;
+  has_results: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type ScenarioSessionFull = ScenarioSessionSummary & {
+  scenarios: Record<string, unknown>;
+  results: Record<string, unknown>;
+};
+
+export const scenarioSessionApi = {
+  list: async () =>
+    (await api.get<{ items: ScenarioSessionSummary[] }>("/scenario-sessions")).data.items,
+  get: async (id: number) =>
+    (await api.get<ScenarioSessionFull>(`/scenario-sessions/${id}`)).data,
+  save: async (payload: {
+    name: string;
+    portfolio_id?: string | null;
+    portfolio_value?: number | null;
+    scenarios: Record<string, unknown>;
+    results: Record<string, unknown>;
+  }) => (await api.post<ScenarioSessionSummary>("/scenario-sessions", payload)).data,
+  remove: async (id: number) =>
+    (await api.delete<{ deleted: boolean; id: number }>(`/scenario-sessions/${id}`)).data,
+};
+
 export const portfolioApi = {
   get: async (id: string | number) =>
     (await api.get<PortfolioResponse>(`/portfolios/${id}`)).data,

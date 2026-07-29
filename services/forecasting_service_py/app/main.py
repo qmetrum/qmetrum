@@ -64,6 +64,7 @@ from app.db.models import (
     AlertFeedback,
     UserAlertPreference,
     SavedScreen,
+    ScenarioSession,
     User,
     UserStoragePreference,
     MarketData,
@@ -3055,6 +3056,108 @@ async def import_portfolio(
         "columns_detected": parsed.get("columns", {}),
     }
     return result
+
+
+class ScenarioSessionRequest(BaseModel):
+    name: str
+    portfolio_id: Optional[str] = None
+    portfolio_value: Optional[float] = None
+    scenarios: Dict[str, Any] = {}
+    results: Dict[str, Any] = {}
+
+
+def _scenario_session_summary(s: ScenarioSession) -> dict:
+    return {
+        "id": s.id, "name": s.name, "portfolio_id": s.portfolio_id,
+        "portfolio_value": s.portfolio_value,
+        "n_scenarios": len((s.scenarios or {}).get("items", []) or []),
+        "has_results": bool((s.results or {}).get("fanResults")),
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+    }
+
+
+@app.post("/scenario-sessions")
+def save_scenario_session(
+    payload: ScenarioSessionRequest,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Save a Scenario Builder session (scenario set + produced results) so it
+    survives logout/login and other devices."""
+    name = (payload.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="A session name is required.")
+    now = datetime.utcnow()
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        row = ScenarioSession(
+            user_id=user.id, name=name[:120], portfolio_id=payload.portfolio_id,
+            portfolio_value=payload.portfolio_value,
+            scenarios=payload.scenarios or {}, results=payload.results or {},
+            created_at=now, updated_at=now,
+        )
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return _scenario_session_summary(row)
+
+
+@app.get("/scenario-sessions")
+def list_scenario_sessions(
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        rows = session.exec(
+            select(ScenarioSession)
+            .where(ScenarioSession.user_id == user.id)
+            .order_by(ScenarioSession.updated_at.desc())
+        ).all()
+        return {"items": [_scenario_session_summary(r) for r in rows]}
+
+
+@app.get("/scenario-sessions/{session_id}")
+def get_scenario_session(
+    session_id: int,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        row = session.exec(
+            select(ScenarioSession)
+            .where(ScenarioSession.id == session_id)
+            .where(ScenarioSession.user_id == user.id)
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Scenario session not found")
+        return {
+            **_scenario_session_summary(row),
+            "scenarios": row.scenarios or {},
+            "results": row.results or {},
+        }
+
+
+@app.delete("/scenario-sessions/{session_id}")
+def delete_scenario_session(
+    session_id: int,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        row = session.exec(
+            select(ScenarioSession)
+            .where(ScenarioSession.id == session_id)
+            .where(ScenarioSession.user_id == user.id)
+        ).first()
+        if not row:
+            raise HTTPException(status_code=404, detail="Scenario session not found")
+        session.delete(row)
+        session.commit()
+        return {"deleted": True, "id": session_id}
 
 
 @app.get("/portfolios/{portfolio_id}")
