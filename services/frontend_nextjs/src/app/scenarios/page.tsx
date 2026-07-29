@@ -357,7 +357,7 @@ export default function ScenariosPage() {
   // ── Saved scenario sessions (server-side; survive logout/login) ──
   const qc = useQueryClient();
   const [showSessions, setShowSessions] = useState(false);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
+  const [savedMsg, setSavedMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const { data: sessions } = useQuery({
     queryKey: ["scenario-sessions"],
     queryFn: scenarioSessionApi.list,
@@ -373,8 +373,20 @@ export default function ScenariosPage() {
       }),
     onSuccess: (s) => {
       qc.invalidateQueries({ queryKey: ["scenario-sessions"] });
-      setSavedMsg(`Saved “${s.name}”.`);
+      setSavedMsg({ text: `Saved “${s.name}”.`, ok: true });
       setTimeout(() => setSavedMsg(null), 4000);
+    },
+    onError: (e) => {
+      // Never fail silently: surface why the save did not work.
+      const err = e as { response?: { data?: { detail?: unknown }; status?: number }; message?: string };
+      const detail = err.response?.data?.detail;
+      const msg =
+        typeof detail === "string"
+          ? detail
+          : err.response?.status === 404
+            ? "Saving is not available yet (the server update is still deploying). Try again in a minute."
+            : err.message ?? "Could not save the session.";
+      setSavedMsg({ text: msg, ok: false });
     },
   });
   const deleteSession = useMutation({
@@ -571,8 +583,14 @@ export default function ScenariosPage() {
       </div>
 
       {savedMsg && (
-        <div className="rounded-lg bg-[var(--teal-light)] px-4 py-2 text-sm text-[var(--text-primary)]">
-          {savedMsg}
+        <div
+          className={`rounded-lg px-4 py-2 text-sm ${
+            savedMsg.ok
+              ? "bg-[var(--teal-light)] text-[var(--text-primary)]"
+              : "bg-[var(--coral-light)] text-[var(--coral)]"
+          }`}
+        >
+          {savedMsg.text}
         </div>
       )}
 
