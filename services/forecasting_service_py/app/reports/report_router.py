@@ -24,6 +24,7 @@ from bisect import bisect_left
 from io import BytesIO
 from xml.sax.saxutils import escape
 from datetime import datetime, timedelta
+from app.utils.timeutil import utcnow
 from typing import Optional, List, Dict
 
 from fastapi import APIRouter, HTTPException, Header, Query
@@ -407,8 +408,8 @@ def _fetch_portfolio_data(assets: List[ReportAsset], horizon_days: int = 90, por
     beta = 1.0
     try:
         with Session(engine) as session:
-            bench_start = all_dates[0] if all_dates else datetime.utcnow() - timedelta(days=252)
-            bench_end = all_dates[-1] if all_dates else datetime.utcnow()
+            bench_start = all_dates[0] if all_dates else utcnow() - timedelta(days=252)
+            bench_end = all_dates[-1] if all_dates else utcnow()
             bench_df = get_benchmark_series(DEFAULT_BENCHMARK, bench_start, bench_end, session)
             if not bench_df.empty:
                 bench_prices = bench_df.set_index("date")["close"].reindex(all_dates, method="ffill")
@@ -1040,7 +1041,7 @@ def generate_quarterly(
     """
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"quarterly_{report_id}.pdf")
-    report_date = datetime.utcnow()
+    report_date = utcnow()
 
     # Validate cheap inputs BEFORE the expensive engine fetch.
     portfolio_value = _require_portfolio_value(payload.portfolio_value)
@@ -1190,7 +1191,7 @@ def generate_onboarding(
     """Generate a New Client Risk Assessment report."""
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"onboarding_{report_id}.pdf")
-    report_date = datetime.utcnow()
+    report_date = utcnow()
 
     # Validate cheap inputs BEFORE the expensive engine fetch.
     portfolio_value = _require_portfolio_value(payload.portfolio_value)
@@ -1310,7 +1311,7 @@ def generate_event_report(
     """Generate a Market Event Briefing report."""
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"event_{report_id}.pdf")
-    report_date = datetime.utcnow()
+    report_date = utcnow()
 
     # Validate cheap inputs BEFORE the expensive engine fetch.
     portfolio_value = _require_portfolio_value(payload.portfolio_value)
@@ -1479,7 +1480,7 @@ def generate_rebalance_report(
     """Generate a Rebalancing Proposal report."""
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"rebalance_{report_id}.pdf")
-    report_date = datetime.utcnow()
+    report_date = utcnow()
 
     # Validate cheap inputs BEFORE the expensive engine fetches.
     portfolio_value = _require_portfolio_value(payload.portfolio_value)
@@ -1642,7 +1643,7 @@ def generate_year_end(
     """Generate a Year-End Portfolio Review report."""
     report_id = uuid.uuid4().hex[:12]
     output_path = os.path.join(REPORT_TMP_DIR, f"yearend_{report_id}.pdf")
-    report_date = datetime.utcnow()
+    report_date = utcnow()
     year = payload.review_year
 
     # Dollar values are optional and rendered only when actually supplied: the

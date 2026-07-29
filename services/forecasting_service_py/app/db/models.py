@@ -3,6 +3,16 @@ from datetime import datetime
 from sqlmodel import SQLModel, Field, Relationship
 from sqlalchemy import Column, JSON, UniqueConstraint
 
+from app.utils.timeutil import UtcDateTime, utcnow
+
+# Instants (created_at, evaluated_at, expires_at, ...) use UtcDateTime, so they
+# come back from the database timezone-aware and serialise with an explicit UTC
+# offset. Columns holding a calendar date instead of a moment — `date` on the
+# market tables, data_last_date, the training-window bounds, purchase_date — stay
+# naive on purpose: they are midnight-anchored days whose timezone is meaningless,
+# and they are written from strptime() and fed to pandas, where mixing aware and
+# naive values is its own bug. See app/utils/timeutil.py.
+
 
 class User(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -10,8 +20,8 @@ class User(SQLModel, table=True):
     cognito_sub: Optional[str] = Field(default=None, index=True, unique=True)
     name: Optional[str] = Field(default=None)
     is_active: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class UserStoragePreference(SQLModel, table=True):
@@ -22,8 +32,8 @@ class UserStoragePreference(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     store_portfolio_runs: bool = Field(default=True, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class Asset(SQLModel, table=True):
@@ -38,8 +48,8 @@ class Asset(SQLModel, table=True):
     currency: str = Field(default="USD")
     vendor: str = Field(default="yahoo")
     vendor_symbol: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class ForecastCache(SQLModel, table=True):
@@ -48,7 +58,7 @@ class ForecastCache(SQLModel, table=True):
     """
     id: Optional[int] = Field(default=None, primary_key=True)
     ticker: str = Field(index=True)
-    run_date: datetime = Field(default_factory=datetime.utcnow, index=True)
+    run_date: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
     horizon_days: int
 
     winner_model: str
@@ -86,8 +96,8 @@ class RiskSimulationCache(SQLModel, table=True):
     input_hash: str = Field(index=True)
     data_last_date: Optional[datetime] = Field(default=None, index=True)
     result_blob: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class PortfolioForecastCache(SQLModel, table=True):
@@ -110,8 +120,8 @@ class PortfolioForecastCache(SQLModel, table=True):
     data_last_date: Optional[datetime] = Field(default=None, index=True)
     request_payload: dict = Field(default_factory=dict, sa_column=Column(JSON))
     result_blob: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class ForecastJob(SQLModel, table=True):
@@ -127,10 +137,10 @@ class ForecastJob(SQLModel, table=True):
     error_message: Optional[str] = None
     result_cache_id: Optional[int] = Field(default=None, index=True)
     result_blob: Optional[dict] = Field(default=None, sa_column=Column(JSON, nullable=True))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    started_at: Optional[datetime] = Field(default=None, index=True)
-    finished_at: Optional[datetime] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    started_at: Optional[datetime] = Field(default=None, index=True, sa_type=UtcDateTime)
+    finished_at: Optional[datetime] = Field(default=None, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
 
 
 class AssetRiskCache(SQLModel, table=True):
@@ -152,14 +162,14 @@ class AssetRiskCache(SQLModel, table=True):
     n_paths: int = Field(index=True)
     data_last_date: Optional[datetime] = Field(default=None, index=True)
     result_blob: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class AssetVolatilitySnapshot(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     symbol: str = Field(foreign_key="asset.symbol", index=True)
-    as_of: datetime = Field(default_factory=datetime.utcnow, index=True)
+    as_of: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
     method: str = Field(default="classical_r", index=True)
     horizon_days: int = Field(index=True)
     n_paths: int = Field(index=True)
@@ -170,7 +180,7 @@ class AssetVolatilitySnapshot(SQLModel, table=True):
     fragility_score_latest: Optional[float] = Field(default=None, index=True)
     regime_latest: Optional[str] = Field(default=None, index=True)
     snapshot_blob: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
 
 
 class NewsCache(SQLModel, table=True):
@@ -188,9 +198,9 @@ class NewsCache(SQLModel, table=True):
     source: str = Field(default="yahoo", index=True)
     limit_count: int = Field(default=10, index=True)
     items_blob: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    fetched_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    expires_at: Optional[datetime] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    fetched_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    expires_at: Optional[datetime] = Field(default=None, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class MarketData(SQLModel, table=True):
@@ -205,14 +215,14 @@ class MarketData(SQLModel, table=True):
     close: float = Field(default=0.0)
     volume: float = Field(default=0.0)
     source: str = Field(default="yahoo")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class FundamentalsSnapshot(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     symbol: str = Field(foreign_key="asset.symbol", index=True)
-    as_of: datetime = Field(default_factory=datetime.utcnow, index=True)
+    as_of: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
     source: str = Field(default="yahoo")
     asset_type: str = Field(default="UNKNOWN", index=True)
     sector: Optional[str] = Field(default=None, index=True)
@@ -228,8 +238,8 @@ class Portfolio(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     name: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
     positions: List["Position"] = Relationship(back_populates="portfolio")
 
@@ -251,8 +261,8 @@ class Watchlist(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
     name: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
     items: List["WatchlistItem"] = Relationship(back_populates="watchlist")
 
@@ -262,7 +272,7 @@ class WatchlistItem(SQLModel, table=True):
     watchlist_id: int = Field(foreign_key="watchlist.id", index=True)
     ticker: str = Field(index=True)
     note: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
     watchlist: Optional[Watchlist] = Relationship(back_populates="items")
 
@@ -279,8 +289,8 @@ class AlertRule(SQLModel, table=True):
     lookback_days: int = Field(default=30)
     is_active: bool = Field(default=True, index=True)
     extra_config: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class AlertEvent(SQLModel, table=True):
@@ -290,7 +300,7 @@ class AlertEvent(SQLModel, table=True):
     alert_type: str = Field(index=True)
     triggered: bool = Field(default=False, index=True)
     payload: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    evaluated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    evaluated_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
 
 
 class AlertFeedback(SQLModel, table=True):
@@ -317,7 +327,7 @@ class AlertFeedback(SQLModel, table=True):
     # AlertEvent -> AlertRule for every row.
     ticker: str = Field(default="", index=True)
     alert_kind: str = Field(default="", index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
 
 
 class UserAlertPreference(SQLModel, table=True):
@@ -341,8 +351,8 @@ class UserAlertPreference(SQLModel, table=True):
     # Consecutive "not_useful" marks on a (ticker, kind) before it auto-mutes.
     # 0 disables auto-muting.
     auto_mute_after: int = Field(default=3)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class SavedScreen(SQLModel, table=True):
@@ -351,8 +361,8 @@ class SavedScreen(SQLModel, table=True):
     name: str
     description: Optional[str] = None
     filters: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class ScenarioSession(SQLModel, table=True):
@@ -366,8 +376,8 @@ class ScenarioSession(SQLModel, table=True):
     portfolio_value: Optional[float] = Field(default=None)
     scenarios: dict = Field(default_factory=dict, sa_column=Column(JSON))  # {items: [...]}
     results: dict = Field(default_factory=dict, sa_column=Column(JSON))    # fans, dates, comparison
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class IntraDayQuote(SQLModel, table=True):
@@ -375,9 +385,9 @@ class IntraDayQuote(SQLModel, table=True):
     symbol: str = Field(primary_key=True, foreign_key="asset.symbol")
     last_price: float = Field(default=0.0)
     change_pct: float = Field(default=0.0)
-    as_of: datetime = Field(default_factory=datetime.utcnow, index=True)
+    as_of: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
     source: str = Field(default="yahoo")
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class BenchmarkReturn(SQLModel, table=True):
@@ -393,8 +403,8 @@ class BenchmarkReturn(SQLModel, table=True):
     return_pct: float = Field(default=0.0)
     cumulative_return: float = Field(default=0.0)
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class PortfolioReportDataCache(SQLModel, table=True):
@@ -409,8 +419,8 @@ class PortfolioReportDataCache(SQLModel, table=True):
     horizon_days: int = Field(default=90, index=True)
     data_last_date: Optional[datetime] = Field(default=None, index=True)
     result_blob: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class AssetReturn(SQLModel, table=True):
@@ -425,8 +435,8 @@ class AssetReturn(SQLModel, table=True):
     period: str = Field(default="daily", index=True)  # daily | monthly
     return_pct: float = Field(default=0.0)
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
 
 
 class RegimeThreshold(SQLModel, table=True):
@@ -443,8 +453,8 @@ class RegimeThreshold(SQLModel, table=True):
     is_active: bool = Field(default=True, index=True)
     source: str = Field(default="default-seed")
     years_of_history: Optional[int] = Field(default=None)
-    calibrated_at: datetime = Field(default_factory=datetime.utcnow, index=True)
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    calibrated_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
 
 
 class AgentRun(SQLModel, table=True):
@@ -460,4 +470,4 @@ class AgentRun(SQLModel, table=True):
     status: str = Field(default="ok", index=True)  # ok | error
     error: Optional[str] = Field(default=None)
     extra: dict = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)

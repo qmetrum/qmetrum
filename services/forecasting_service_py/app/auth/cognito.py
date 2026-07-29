@@ -14,6 +14,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from app.utils.timeutil import utcnow
 from typing import Any, Optional
 
 from jose import jwk, jwt
@@ -170,7 +171,7 @@ def find_or_create_user_for_claims(session: Session, claims: dict[str, Any]) -> 
             user.email = email
         if name and user.name != name:
             user.name = name
-        user.updated_at = datetime.utcnow()
+        user.updated_at = utcnow()
         session.add(user)
         session.commit()
         session.refresh(user)
@@ -183,7 +184,7 @@ def find_or_create_user_for_claims(session: Session, claims: dict[str, Any]) -> 
             user.cognito_sub = sub
             if name and not user.name:
                 user.name = name
-            user.updated_at = datetime.utcnow()
+            user.updated_at = utcnow()
             session.add(user)
             session.commit()
             session.refresh(user)

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import sys
 from datetime import datetime
+from app.utils.timeutil import utcnow
 from pathlib import Path
 
 # Ensure repo root is on sys.path
@@ -109,7 +110,7 @@ def main() -> int:
         demo_user.cognito_sub = cognito_sub
         if cognito_name and not demo_user.name:
             demo_user.name = cognito_name
-        demo_user.updated_at = datetime.utcnow()
+        demo_user.updated_at = utcnow()
         session.add(demo_user)
 
         session.commit()

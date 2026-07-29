@@ -14,6 +14,7 @@ import math
 import secrets
 import uuid
 from datetime import datetime, timedelta
+from app.utils.timeutil import utcnow
 import copy
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -214,7 +215,7 @@ def _reap_orphaned_forecast_jobs() -> None:
     deploy/restart) and can never complete. Left alone, clients poll the corpse
     forever — and worse, a resubmit with the same request hash RE-ATTACHES to
     it instead of starting a fresh job. Fail them at startup."""
-    now = datetime.utcnow()
+    now = utcnow()
     try:
         with Session(engine) as session:
             stale = session.exec(
@@ -516,7 +517,7 @@ def _ensure_default_user() -> None:
         existing = session.get(User, DEFAULT_USER_ID)
         if existing:
             return
-        now = datetime.utcnow()
+        now = utcnow()
         email = "local@qmetrum.dev" if DEFAULT_USER_ID == 1 else f"local+{DEFAULT_USER_ID}@qmetrum.dev"
         session.add(
             User(
@@ -575,7 +576,7 @@ def _get_user_storage_preference(session: Session, user_id: int) -> dict:
 
 
 def _set_user_storage_preference(session: Session, user_id: int, *, store_portfolio_runs: bool) -> UserStoragePreference:
-    now = datetime.utcnow()
+    now = utcnow()
     row = session.exec(
         select(UserStoragePreference).where(UserStoragePreference.user_id == int(user_id))
     ).first()
@@ -607,7 +608,7 @@ def _portfolio_storage_enabled_for_user(session: Session, user_id: int) -> bool:
 def _ensure_asset(session: Session, symbol: str, fundamentals: Optional[dict] = None) -> Asset:
     canon = _canonical_symbol(symbol)
     asset = session.get(Asset, canon)
-    now = datetime.utcnow()
+    now = utcnow()
 
     if not asset:
         asset = Asset(
@@ -759,7 +760,7 @@ def _portfolio_forecast_cache_write(
     request_payload: dict,
     result_blob: dict,
 ) -> PortfolioForecastCache:
-    now = datetime.utcnow()
+    now = utcnow()
     existing = session.exec(
         select(PortfolioForecastCache)
         .where(PortfolioForecastCache.owner_user_id == owner_user_id)
@@ -864,7 +865,7 @@ def _adapt_nightly_blob_to_ui(blob: dict, portfolio_id: int) -> dict:
     forecast_dates = fc.get("forecast_dates", [])
     if not forecast_dates and forecast_prices:
         from datetime import datetime as dt, timedelta
-        base = dt.utcnow()
+        base = utcnow()
         forecast_dates = [(base + timedelta(days=i+1)).strftime("%Y-%m-%d") for i in range(len(forecast_prices))]
 
     # Confidence intervals — try multiple key formats
@@ -975,7 +976,7 @@ def _compute_portfolio_forecast_result(
 
 
 def _claim_forecast_job_by_id(job_id: str) -> bool:
-    now = datetime.utcnow()
+    now = utcnow()
     with Session(engine) as session:
         stmt = (
             update(ForecastJob)
@@ -1015,7 +1016,7 @@ def _claim_next_forecast_job(job_type: str = "portfolio_forecast") -> Optional[s
 
 
 def _run_portfolio_forecast_job(job_id: str, assume_claimed: bool = False) -> bool:
-    start_ts = datetime.utcnow()
+    start_ts = utcnow()
     if not assume_claimed:
         claimed = _claim_forecast_job_by_id(job_id)
         if not claimed:
@@ -1111,8 +1112,8 @@ def _run_portfolio_forecast_job(job_id: str, assume_claimed: bool = False) -> bo
                         None,
                         persisted=False,
                     )
-                job.finished_at = datetime.utcnow()
-                job.updated_at = datetime.utcnow()
+                job.finished_at = utcnow()
+                job.updated_at = utcnow()
                 session.add(job)
                 session.commit()
         logger.info("Forecast job %s completed.", job_id)
@@ -1125,8 +1126,8 @@ def _run_portfolio_forecast_job(job_id: str, assume_claimed: bool = False) -> bo
                 job.status = "failed"
                 job.progress = 1.0
                 job.error_message = str(e)
-                job.finished_at = datetime.utcnow()
-                job.updated_at = datetime.utcnow()
+                job.finished_at = utcnow()
+                job.updated_at = utcnow()
                 session.add(job)
                 session.commit()
         return False
@@ -1237,7 +1238,7 @@ def _enqueue_portfolio_forecast_job(
                 "dispatch_backend": FORECAST_JOB_DISPATCH_MODE,
             }
 
-        now = datetime.utcnow()
+        now = utcnow()
         job_id = uuid.uuid4().hex
         request_payload = _json_compatible(
             {
@@ -1360,7 +1361,7 @@ def _save_simulation_cache_result(
     data_last_date: Optional[datetime],
     result_blob: dict,
 ) -> None:
-    now = datetime.utcnow()
+    now = utcnow()
     existing = session.exec(
         select(RiskSimulationCache)
         .where(RiskSimulationCache.entity_type == entity_type)
@@ -1420,7 +1421,7 @@ def _asset_risk_cache_read(
     if not row or not row.result_blob:
         return None
 
-    age_minutes = (datetime.utcnow() - row.updated_at).total_seconds() / 60.0 if row.updated_at else 10**9
+    age_minutes = (utcnow() - row.updated_at).total_seconds() / 60.0 if row.updated_at else 10**9
     is_fresh = age_minutes <= max_age_minutes
     if not is_fresh and not allow_stale:
         return None
@@ -1450,7 +1451,7 @@ def _asset_risk_cache_write(
     data_last_date: Optional[datetime],
     result_blob: dict,
 ) -> AssetRiskCache:
-    now = datetime.utcnow()
+    now = utcnow()
     query = (
         select(AssetRiskCache)
         .where(AssetRiskCache.symbol == symbol)
@@ -1538,7 +1539,7 @@ def _asset_volatility_snapshot_write(
         "mc_median": risk_payload.get("mc_median", []),
         "mc_upper": risk_payload.get("mc_upper", []),
     }
-    now = datetime.utcnow()
+    now = utcnow()
     row = AssetVolatilitySnapshot(
         symbol=symbol,
         as_of=now,
@@ -1579,7 +1580,7 @@ def _news_cache_read(
     if not row or not isinstance(row.items_blob, dict):
         return None
 
-    now = datetime.utcnow()
+    now = utcnow()
     expires_at = row.expires_at
     is_fresh = bool(expires_at and expires_at >= now)
     if not is_fresh and max_age_minutes > 0 and row.updated_at:
@@ -1613,7 +1614,7 @@ def _news_cache_write(
     items: List[dict],
     ttl_minutes: int,
 ) -> NewsCache:
-    now = datetime.utcnow()
+    now = utcnow()
     expires_at = now + timedelta(minutes=max(1, int(ttl_minutes or 1)))
     payload = {"ticker": symbol, "items": items}
     existing = session.exec(
@@ -1784,7 +1785,7 @@ def _get_or_create_saved_watchlist(session: Session, user: User) -> Watchlist:
     ).first()
     if wl:
         return wl
-    now = datetime.utcnow()
+    now = utcnow()
     wl = Watchlist(user_id=user.id, name=SAVED_ASSETS_WATCHLIST_NAME, created_at=now, updated_at=now)
     session.add(wl)
     session.commit()
@@ -2047,7 +2048,7 @@ def _evaluate_alerts_internal(
                     "reason": f"Evaluation failed: {str(e)}",
                 }
 
-            now = datetime.utcnow()
+            now = utcnow()
             triggered = bool(result.get("triggered", False))
             cooldown_seconds = int((alert.extra_config or {}).get("cooldown_seconds", ALERT_EVENT_COOLDOWN_SECONDS))
             suppressed_by_cooldown = False
@@ -2136,7 +2137,7 @@ def _alert_scheduler_loop() -> None:
         ALERT_SCHEDULER_ENABLED,
     )
     while not _alert_scheduler_stop.is_set():
-        started = datetime.utcnow()
+        started = utcnow()
         try:
             summary = _evaluate_alerts_internal(active_only=True, persist=True)
             logger.info(
@@ -2147,7 +2148,7 @@ def _alert_scheduler_loop() -> None:
         except Exception as e:
             logger.error("Scheduled alert evaluation failed: %s", str(e))
 
-        elapsed = (datetime.utcnow() - started).total_seconds()
+        elapsed = (utcnow() - started).total_seconds()
         sleep_for = max(1, ALERT_SCHEDULER_INTERVAL_SECONDS - int(elapsed))
         _alert_scheduler_stop.wait(sleep_for)
 
@@ -2563,7 +2564,7 @@ def generate_forecast(payload: ForecastRequest):
                 "start": training_start.isoformat(),
                 "end": training_end.isoformat()
             },
-            "last_train_date": datetime.utcnow().isoformat()
+            "last_train_date": utcnow().isoformat()
         })
         result["cache"] = {
             "hit": False,
@@ -2581,7 +2582,7 @@ def generate_forecast(payload: ForecastRequest):
                 with Session(engine) as session:
                     cache = ForecastCache(
                         ticker=payload.ticker,
-                        run_date=datetime.utcnow(),
+                        run_date=utcnow(),
                         horizon_days=payload.horizon_days,
                         winner_model=result.get("model_used", "unknown"),
                         model_version=model_version,
@@ -2889,7 +2890,7 @@ def create_portfolio(
     if not payload.name:
         raise HTTPException(status_code=400, detail="name is required for new portfolio")
 
-    now = datetime.utcnow()
+    now = utcnow()
     assets = _normalize_assets(payload.assets)
     with Session(engine) as session:
         user = _require_user(session, user_id, x_user_id)
@@ -2955,7 +2956,7 @@ def _derive_import_weights(holdings: List[dict]) -> tuple:
 
 
 def _create_portfolio_from_holdings(session, user, name, holdings, weights) -> dict:
-    now = datetime.utcnow()
+    now = utcnow()
     pname = (name or "").strip() or f"Imported {now.strftime('%Y-%m-%d')}"
     portfolio = Portfolio(user_id=user.id, name=pname, created_at=now, updated_at=now)
     session.add(portfolio)
@@ -3100,7 +3101,7 @@ def save_scenario_session(
     name = (payload.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="A session name is required.")
-    now = datetime.utcnow()
+    now = utcnow()
     with Session(engine) as session:
         user = _require_user(session, user_id, x_user_id)
         row = ScenarioSession(
@@ -3206,7 +3207,7 @@ def upsert_portfolio(
     Create or update a portfolio.
     """
     pid = _parse_portfolio_id(portfolio_id)
-    now = datetime.utcnow()
+    now = utcnow()
     assets = _normalize_assets(payload.assets) if payload.assets is not None else []
     with Session(engine) as session:
         user = _require_user(session, user_id, x_user_id)
@@ -4324,7 +4325,7 @@ def create_user(payload: UserCreateRequest):
         existing = session.exec(select(User).where(User.email == email)).first()
         if existing:
             return existing
-        now = datetime.utcnow()
+        now = utcnow()
         user = User(email=email, is_active=True, created_at=now, updated_at=now)
         session.add(user)
         session.commit()
@@ -4417,7 +4418,7 @@ def create_watchlist(
     user_id: Optional[int] = None,
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
-    now = datetime.utcnow()
+    now = utcnow()
     tickers = [_canonical_symbol(t) for t in payload.tickers]
     unique = []
     seen = set()
@@ -4500,7 +4501,7 @@ def update_watchlist(
                 _ensure_asset(session, ticker)
                 session.add(WatchlistItem(watchlist_id=watchlist.id, ticker=ticker))
 
-        watchlist.updated_at = datetime.utcnow()
+        watchlist.updated_at = utcnow()
         session.add(watchlist)
         session.commit()
         session.refresh(watchlist)
@@ -4568,7 +4569,7 @@ def add_saved_asset(
         if not existing:
             _ensure_asset(session, ticker)
             session.add(WatchlistItem(watchlist_id=wl.id, ticker=ticker))
-            wl.updated_at = datetime.utcnow()
+            wl.updated_at = utcnow()
             session.add(wl)
             session.commit()
         items = session.exec(
@@ -4594,7 +4595,7 @@ def remove_saved_asset(
         ).first()
         if row:
             session.delete(row)
-            wl.updated_at = datetime.utcnow()
+            wl.updated_at = utcnow()
             session.add(wl)
             session.commit()
         items = session.exec(
@@ -4676,7 +4677,7 @@ def create_alert(
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
     ticker = _canonical_symbol(payload.ticker)
-    now = datetime.utcnow()
+    now = utcnow()
     with Session(engine) as session:
         user = _require_user(session, user_id, x_user_id)
         _ensure_asset(session, ticker)
@@ -4816,7 +4817,7 @@ def update_alert_preferences(
 
         for key, value in data.items():
             setattr(prefs, key, value)
-        prefs.updated_at = datetime.utcnow()
+        prefs.updated_at = utcnow()
         session.add(prefs)
         session.commit()
         session.refresh(prefs)
@@ -4889,7 +4890,7 @@ def submit_alert_feedback(
                 if kind.lower() not in {m.lower() for m in muted}:
                     muted.append(kind.lower())
                     prefs.muted_kinds = muted
-                    prefs.updated_at = datetime.utcnow()
+                    prefs.updated_at = utcnow()
                     session.add(prefs)
                     session.commit()
                     auto_muted = True
@@ -5013,7 +5014,7 @@ def update_alert(
             alert.is_active = bool(payload.is_active)
         if payload.extra_config is not None:
             alert.extra_config = payload.extra_config
-        alert.updated_at = datetime.utcnow()
+        alert.updated_at = utcnow()
 
         session.add(alert)
         session.commit()
@@ -5274,7 +5275,7 @@ def qpulse_ingest(
         )
 
     asset_class = (payload.asset_class or "unknown").strip().lower()
-    now = datetime.utcnow()
+    now = utcnow()
     matched_rules = 0
     persisted = 0
     suppressed: List[Dict[str, Any]] = []
@@ -5438,7 +5439,7 @@ def create_saved_screen(
     user_id: Optional[int] = None,
     x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
 ):
-    now = datetime.utcnow()
+    now = utcnow()
     with Session(engine) as session:
         user = _require_user(session, user_id, x_user_id)
         screen = SavedScreen(
@@ -5503,7 +5504,7 @@ def update_saved_screen(
         screen.name = payload.name
         screen.description = payload.description
         screen.filters = payload.filters
-        screen.updated_at = datetime.utcnow()
+        screen.updated_at = utcnow()
         session.add(screen)
         session.commit()
         session.refresh(screen)

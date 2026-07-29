@@ -20,6 +20,7 @@ import sys
 import time
 import traceback
 from datetime import datetime, timedelta
+from app.utils.timeutil import utcnow
 from typing import List, Optional
 
 import numpy as np
@@ -97,7 +98,7 @@ def refresh_eod_prices(session: Session, symbols: List[str]) -> int:
     """Fetch and upsert EOD OHLCV for all symbols. Returns count of symbols updated."""
     vendor = get_vendor()
     updated = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     for i, symbol in enumerate(symbols, 1):
         logger.info(f"[{i}/{len(symbols)}] Fetching EOD for {symbol}")
@@ -170,8 +171,10 @@ def compute_and_store_returns(
     lookback_days: int = 400,
 ) -> None:
     """Compute daily and monthly returns for assets and benchmarks."""
-    now = datetime.utcnow()
-    cutoff = now - timedelta(days=lookback_days)
+    now = utcnow()
+    # Naive on purpose: compared against MarketData.date, a calendar-date column
+    # that stays naive by design. See app/utils/timeutil.py.
+    cutoff = (now - timedelta(days=lookback_days)).replace(tzinfo=None)
 
     # --- Asset daily returns ---
     logger.info("Computing asset daily returns...")
@@ -276,7 +279,7 @@ def precompute_asset_forecasts(
     from app.db.models import ForecastCache
 
     computed = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     for i, symbol in enumerate(symbols, 1):
         canon = symbol.upper()
@@ -350,7 +353,7 @@ def precompute_asset_risk(
     from app.db.models import AssetRiskCache, AssetVolatilitySnapshot
 
     computed = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     for i, symbol in enumerate(symbols, 1):
         canon = symbol.upper()
@@ -452,7 +455,7 @@ def precompute_portfolio_forecasts(
     import hashlib, json
 
     computed = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     portfolios = session.exec(select(Portfolio)).all()
     logger.info(f"Pre-computing forecasts for {len(portfolios)} portfolios")
@@ -809,7 +812,7 @@ def sync_portfolio_cache(session: Session) -> int:
     import hashlib, json
 
     synced = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     portfolios = session.exec(select(Portfolio)).all()
     for portfolio in portfolios:

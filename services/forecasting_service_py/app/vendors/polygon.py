@@ -9,6 +9,7 @@ Requires:
 import os
 import logging
 from datetime import datetime, timedelta
+from app.utils.timeutil import utcnow
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,7 @@ class PolygonVendor:
         """Fetch daily OHLCV bars from Polygon."""
         try:
             days = _period_to_days(period)
-            end_date = datetime.utcnow().date()
+            end_date = utcnow().date()
             start_date = end_date - timedelta(days=days)
 
             # Polygon uses different ticker formats:
@@ -135,7 +136,7 @@ class PolygonVendor:
                 return {
                     "last_price": float(snapshot.day.close or 0),
                     "change_pct": float(snapshot.todays_change_percent or 0),
-                    "as_of": datetime.utcnow().isoformat(),
+                    "as_of": utcnow().isoformat(),
                 }
         except Exception as e:
             logger.error(f"[Polygon] Error fetching snapshot for {ticker}: {e}")

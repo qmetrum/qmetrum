@@ -15,6 +15,7 @@ import json
 import logging
 import threading
 from datetime import datetime
+from app.utils.timeutil import utcnow
 from pathlib import Path
 from typing import Any, Optional
 
@@ -70,7 +71,7 @@ def _seed_from_json_if_empty(session: Session) -> None:
         return
 
     classes = blob.get("classes") or {}
-    now = datetime.utcnow()
+    now = utcnow()
     inserted = 0
     for cls, vals in classes.items():
         if not isinstance(vals, dict):

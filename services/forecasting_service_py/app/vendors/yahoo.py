@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from app.utils.timeutil import utcnow
 from typing import List, Dict
 
 import pandas as pd
@@ -151,7 +152,7 @@ class YahooFinanceVendor:
             return {
                 "last_price": float(last_price or 0),
                 "change_pct": float(change_pct),
-                "as_of": datetime.utcnow().isoformat(),
+                "as_of": utcnow().isoformat(),
             }
         except Exception as e:
             logger.error(f"[Yahoo] Error fetching snapshot for {ticker}: {e}")

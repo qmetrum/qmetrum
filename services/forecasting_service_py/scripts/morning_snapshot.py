@@ -18,6 +18,7 @@ import logging
 import sys
 import time
 from datetime import datetime
+from app.utils.timeutil import utcnow
 from typing import List
 
 from sqlmodel import Session, select
@@ -43,7 +44,7 @@ def refresh_quotes(session: Session, symbols: List[str]) -> int:
     """Fetch latest quotes and upsert IntraDayQuote. Returns count updated."""
     vendor = get_vendor()
     updated = 0
-    now = datetime.utcnow()
+    now = utcnow()
 
     for i, symbol in enumerate(symbols, 1):
         try:

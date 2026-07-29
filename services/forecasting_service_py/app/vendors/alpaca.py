@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime, timedelta
+from app.utils.timeutil import utcnow
 from typing import Dict, List
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,9 @@ _PERIOD_DAYS = {
 def _period_to_start(period: str) -> datetime:
     p = (period or "").lower()
     if p == "ytd":
-        return datetime(datetime.utcnow().year, 1, 1)
+        return datetime(utcnow().year, 1, 1)
     days = _PERIOD_DAYS.get(p, 730)
-    return datetime.utcnow() - timedelta(days=days)
+    return utcnow() - timedelta(days=days)
 
 
 def _is_crypto(ticker: str) -> bool:
@@ -144,7 +145,7 @@ class AlpacaVendor:
             req = NewsRequest(
                 symbols=[ticker.upper()],
                 limit=int(limit),
-                start=datetime.utcnow() - timedelta(days=30),
+                start=utcnow() - timedelta(days=30),
             )
             resp = self._news().get_news(req)
             # alpaca-py returns a NewsSet with .news attribute (list of NewsArticle)
@@ -199,7 +200,7 @@ class AlpacaVendor:
             return {
                 "last_price": last_price,
                 "change_pct": change_pct,
-                "as_of": datetime.utcnow().isoformat(),
+                "as_of": utcnow().isoformat(),
             }
         except Exception as exc:
             logger.warning("[Alpaca] snapshot failed for %s: %s", ticker, exc)

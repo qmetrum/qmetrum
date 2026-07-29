@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from app.utils.timeutil import utcnow
 from typing import List, Dict, Optional
 
 from sqlmodel import Session, select
@@ -36,7 +37,7 @@ def _ensure_asset_exists(session: Session, symbol: str) -> Asset:
     if asset:
         return asset
 
-    now = datetime.utcnow()
+    now = utcnow()
     asset = Asset(
         symbol=canon,
         name=canon,
@@ -70,7 +71,9 @@ def _get_price_series_cached_internal(
     force_refresh: bool = False,
 ) -> List[Dict]:
     canon = _canonical_symbol(symbol)
-    cutoff = datetime.utcnow() - timedelta(days=_period_to_days(period))
+    # Naive on purpose: this is compared against MarketData.date, a calendar-date
+    # column that is written naive from strptime() and deliberately not UtcDateTime.
+    cutoff = (utcnow() - timedelta(days=_period_to_days(period))).replace(tzinfo=None)
 
     if not force_refresh:
         cached_rows = session.exec(
@@ -85,7 +88,7 @@ def _get_price_series_cached_internal(
     vendor_rows = fetch_stock_data(canon, period=period)
     if vendor_rows:
         _ensure_asset_exists(session, canon)
-        now = datetime.utcnow()
+        now = utcnow()
         for row in vendor_rows:
             date_value = datetime.strptime(str(row["date"]), "%Y-%m-%d")
             close_price = float(row.get("price", 0.0) or 0.0)
@@ -166,7 +169,7 @@ def _get_fundamentals_cached_internal(
     ).first()
 
     if latest and latest.payload and not force_refresh:
-        age_hours = (datetime.utcnow() - latest.as_of).total_seconds() / 3600.0
+        age_hours = (utcnow() - latest.as_of).total_seconds() / 3600.0
         if age_hours <= max_age_hours:
             return latest.payload
 
@@ -178,7 +181,7 @@ def _get_fundamentals_cached_internal(
         valuation = fresh.get("valuation", {}) if isinstance(fresh, dict) else {}
         technicals = fresh.get("technicals", {}) if isinstance(fresh, dict) else {}
 
-        now = datetime.utcnow()
+        now = utcnow()
         snapshot = FundamentalsSnapshot(
             symbol=canon,
             as_of=now,
