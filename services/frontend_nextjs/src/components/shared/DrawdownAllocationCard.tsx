@@ -3,10 +3,107 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
+  ResponsiveContainer,
+  ScatterChart,
+  Scatter,
+  XAxis,
+  YAxis,
+  ZAxis,
+  CartesianGrid,
+  Tooltip,
+  Cell,
+  LabelList,
+} from "recharts";
+import {
   portfolioApi,
   type DrawdownAllocationResponse,
   type AllocationMethod,
 } from "@/lib/api";
+
+const METHOD_COLOR: Record<string, string> = {
+  drawdown_mgd: "#0F8B6E", // teal (highlight)
+  inverse_vol: "#3B6FB5",  // blue
+  risk_parity: "#D4920B",  // amber
+  equal: "#64748B",        // slate
+};
+
+type ScatterPoint = { key: string; label: string; x: number; y: number; z: number; cdar: number; turn: number };
+
+function ScatterTip({ active, payload }: { active?: boolean; payload?: Array<{ payload: ScatterPoint }> }) {
+  if (!active || !payload?.length) return null;
+  const p = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-[var(--card-border)] bg-[var(--card-bg)] px-3 py-2 text-[11px] shadow-sm">
+      <div className="font-semibold text-[var(--navy)]">{p.label}</div>
+      <div className="text-[var(--text-secondary)]">Sharpe {p.y.toFixed(2)}</div>
+      <div className="text-[var(--text-secondary)]">Max DD -{p.x.toFixed(1)}% · CDaR {(p.cdar * 100).toFixed(1)}%</div>
+      <div className="text-[var(--text-secondary)]">Turnover {p.turn.toFixed(2)}×/yr</div>
+    </div>
+  );
+}
+
+function RiskReturnScatter({
+  methods, selected, onSelect,
+}: {
+  methods: AllocationMethod[];
+  selected: string;
+  onSelect: (k: string) => void;
+}) {
+  const pts: ScatterPoint[] = methods
+    .filter((m) => m.profile)
+    .map((m) => ({
+      key: m.key,
+      label: m.label,
+      x: +Math.abs(m.profile!.max_drawdown * 100).toFixed(2),  // drawdown depth (%), higher = worse
+      y: +m.profile!.sharpe.toFixed(3),
+      z: m.key === "drawdown_mgd" ? 150 : 70,
+      cdar: m.profile!.cdar95,
+      turn: m.profile!.turnover_per_yr,
+    }));
+  if (pts.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 text-[11px] font-medium text-[var(--text-secondary)]">
+        Risk vs return — <span className="font-semibold">up‑and‑left is better</span> (higher Sharpe, shallower drawdown). No dot dominates.
+      </div>
+      <ResponsiveContainer width="100%" height={230}>
+        <ScatterChart margin={{ top: 16, right: 24, bottom: 24, left: 4 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--card-border)" />
+          <XAxis
+            type="number" dataKey="x" name="Max Drawdown" unit="%"
+            domain={["dataMin - 1", "dataMax + 1"]} tick={{ fontSize: 11 }}
+            label={{ value: "Max drawdown (%) — deeper →", position: "bottom", fontSize: 11, fill: "var(--text-muted)" }}
+          />
+          <YAxis
+            type="number" dataKey="y" name="Sharpe" domain={["auto", "auto"]} tick={{ fontSize: 11 }}
+            label={{ value: "Sharpe", angle: -90, position: "insideLeft", fontSize: 11, fill: "var(--text-muted)" }}
+          />
+          <ZAxis type="number" dataKey="z" range={[70, 150]} />
+          <Tooltip content={<ScatterTip />} cursor={{ strokeDasharray: "3 3" }} />
+          <Scatter
+            data={pts}
+            onClick={(d: unknown) => {
+              const k = (d as { key?: string; payload?: { key?: string } })?.key
+                ?? (d as { payload?: { key?: string } })?.payload?.key;
+              if (k) onSelect(k);
+            }}
+          >
+            {pts.map((p) => (
+              <Cell
+                key={p.key}
+                fill={METHOD_COLOR[p.key] ?? "#64748B"}
+                stroke={p.key === selected ? "#0b3b57" : "#ffffff"}
+                strokeWidth={p.key === selected ? 2.5 : 1}
+                style={{ cursor: "pointer" }}
+              />
+            ))}
+            <LabelList dataKey="label" position="top" style={{ fontSize: 10, fill: "var(--text-secondary)" }} />
+          </Scatter>
+        </ScatterChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
 
 type Props = {
   portfolioId: string | number;
@@ -133,6 +230,9 @@ export function DrawdownAllocationCard({ portfolioId, onApply }: Props) {
               </tbody>
             </table>
           </div>
+
+          {/* Risk-return scatter: makes the tradeoff visible (no method dominates) */}
+          <RiskReturnScatter methods={data.methods} selected={selected} onSelect={(k) => { setSelected(k); setApply({ status: "idle" }); }} />
 
           {/* Selected method: note + suggested weights */}
           {selMethod && (
