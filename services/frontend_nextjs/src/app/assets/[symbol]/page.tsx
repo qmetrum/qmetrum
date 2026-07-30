@@ -245,14 +245,14 @@ export default function AssetDetailPage() {
             className={`text-sm font-medium px-4 py-2 rounded-lg border transition-colors ${
               isSaved(ticker)
                 ? "bg-[var(--btn-navy)] text-white border-[var(--btn-navy)]"
-                : "bg-white text-[var(--navy)] border-[var(--card-border)] hover:bg-[var(--content-bg)]"
+                : "bg-[var(--card-bg)] text-[var(--navy)] border-[var(--card-border)] hover:bg-[var(--content-bg)]"
             }`}
           >
             {isSaved(ticker) ? "\u2605 Saved" : "\u2606 Save Asset"}
           </button>
           <button
             onClick={() => setShowAlertModal(true)}
-            className="text-sm font-medium bg-white text-[var(--navy)] border border-[var(--card-border)] px-4 py-2 rounded-lg hover:bg-[var(--content-bg)]"
+            className="text-sm font-medium bg-[var(--card-bg)] text-[var(--navy)] border border-[var(--card-border)] px-4 py-2 rounded-lg hover:bg-[var(--content-bg)]"
           >
             Create Alert
           </button>

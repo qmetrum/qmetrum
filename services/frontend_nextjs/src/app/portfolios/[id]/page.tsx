@@ -648,7 +648,7 @@ export default function PortfolioDetailPage() {
                   </div>
                 </div>
               )}
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="border-b border-[var(--card-border)] bg-[var(--content-bg)]">
                     <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Ticker</th>
@@ -702,7 +702,7 @@ export default function PortfolioDetailPage() {
                     );
                   })}
                 </tbody>
-              </table>
+              </table></div>
             </div>
           ) : (
             /* --- Edit view --- */
@@ -710,7 +710,7 @@ export default function PortfolioDetailPage() {
               <div className="border-b border-[var(--card-border)] bg-[var(--content-bg)] px-5 py-2 text-xs text-[var(--text-muted)]">
                 Tip: Cost basis and shares are optional. Fill them in to track $ P&amp;L; leave blank for weight-only tracking.
               </div>
-              <table className="w-full text-sm">
+              <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm">
                 <thead>
                   <tr className="border-b border-[var(--card-border)] bg-[var(--content-bg)]">
                     <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Ticker</th>
@@ -784,7 +784,7 @@ export default function PortfolioDetailPage() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+              </table></div>
 
               {/* Add new asset row */}
               <div className="flex flex-wrap items-center gap-2 border-t border-[var(--card-border)] px-5 py-3 bg-[var(--content-bg)]">

@@ -115,7 +115,7 @@ export default function AssetsPage() {
               {searching ? "Searching..." : "No results found"}
             </div>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto"><table className="w-full min-w-[640px] text-sm">
               <thead>
                 <tr className="border-b border-[var(--card-border)] bg-[var(--content-bg)]">
                   <th className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">Symbol</th>
@@ -138,7 +138,7 @@ export default function AssetsPage() {
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           )}
         </div>
       )}

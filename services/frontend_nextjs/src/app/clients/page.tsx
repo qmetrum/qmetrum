@@ -319,7 +319,7 @@ export default function ClientsPage() {
       {isLoading ? (
         <div className="grid gap-4 md:grid-cols-2">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-48 rounded-xl bg-white border border-[var(--card-border)] animate-pulse" />
+            <div key={i} className="h-48 rounded-xl bg-[var(--card-bg)] border border-[var(--card-border)] animate-pulse" />
           ))}
         </div>
       ) : (portfolios ?? []).length === 0 ? (
