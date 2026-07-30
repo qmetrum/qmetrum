@@ -92,7 +92,7 @@ export function ClientQADrawer({
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
       <div
-        className="w-full max-w-lg bg-white h-full flex flex-col shadow-2xl"
+        className="w-full max-w-lg bg-[var(--card-bg)] h-full flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between border-b border-[var(--card-border)] px-5 py-3">

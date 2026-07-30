@@ -212,7 +212,7 @@ export function ScenarioPathsChart({
             interval="preserveStartEnd"
             minTickGap={50}
           />
-          <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} domain={["auto", "auto"]} />
+          <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} domain={["auto", "auto"]} label={{ value: "Portfolio value ($)", angle: -90, position: "insideLeft", fontSize: 11, fill: "#8B95A2" }} />
           <Tooltip
             contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
             labelFormatter={(v) => new Date(v as string).toLocaleDateString()}

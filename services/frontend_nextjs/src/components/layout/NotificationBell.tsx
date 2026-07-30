@@ -93,7 +93,7 @@ export function NotificationBell({ enabled }: { enabled: boolean }) {
       </button>
 
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border border-[var(--border)] bg-white shadow-lg overflow-hidden z-40">
+        <div className="absolute right-0 top-full mt-2 w-80 rounded-lg border border-[var(--border)] bg-[var(--card-bg)] shadow-lg overflow-hidden z-40">
           <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
             <span className="text-sm font-semibold text-[var(--text-primary)]">Alerts</span>
             <button

@@ -132,7 +132,7 @@ export function ReturnsChart({
       <ComposedChart data={data} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
         <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#8B95A2" }} />
-        <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v}%`} />
+        <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v}%`} label={{ value: "Monthly return", angle: -90, position: "insideLeft", fontSize: 11, fill: "#8B95A2" }} />
         <Tooltip
           contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
           // @ts-expect-error recharts Formatter typing quirk (matches existing ForecastChart pattern)

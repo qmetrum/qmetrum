@@ -183,6 +183,14 @@ body {
 *::-webkit-scrollbar-track { background: transparent; }
 *::-webkit-scrollbar-thumb { background: #C4CAD0; border-radius: 999px; }
 
+/* Keyboard focus ring (only on keyboard nav, not mouse click). :where() keeps
+   specificity at 0 so component styles still win for everything but the ring. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* ── Reusable card ── */
 .q-card {
   background: var(--card-bg);

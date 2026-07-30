@@ -59,7 +59,7 @@ export function TopBar() {
           />
         </div>
         {open && results.length > 0 && (
-          <div className="absolute top-full left-0 mt-1 w-full rounded-lg border border-[var(--border)] bg-white shadow-lg overflow-hidden">
+          <div className="absolute top-full left-0 mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--card-bg)] shadow-lg overflow-hidden">
             {results.map((r) => (
               <button
                 key={r.symbol}
