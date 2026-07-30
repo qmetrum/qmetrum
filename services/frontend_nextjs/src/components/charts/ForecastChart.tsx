@@ -90,6 +90,7 @@ export function ForecastChart({
   };
 
   return (
+    <div className="w-full">
     <ResponsiveContainer width="100%" height={height}>
       <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
@@ -112,7 +113,7 @@ export function ForecastChart({
             const key = String(name ?? "");
             if (key === "band" && Array.isArray(value)) {
               const [lo, up] = value as number[];
-              return [`${Number(lo).toFixed(2)} – ${Number(up).toFixed(2)}`, "95% CI"];
+              return [`${Number(lo).toFixed(2)} – ${Number(up).toFixed(2)}`, "Modeled 95% range"];
             }
             const labels: Record<string, string> = { history: "Historical", forecast: "Forecast" };
             const formatted = typeof value === "number" ? value.toFixed(2) : String(value ?? "");
@@ -168,5 +169,9 @@ export function ForecastChart({
         )}
       </ComposedChart>
     </ResponsiveContainer>
+      <p className="mt-1 px-2 text-[10px] leading-snug text-[var(--text-muted)]">
+        Shaded band = modeled 95% range (Monte Carlo) — an uncertainty estimate, not a prediction.
+      </p>
+    </div>
   );
 }

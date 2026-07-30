@@ -20,10 +20,11 @@ export default function DashboardPage() {
     queryFn: healthApi.check,
   });
 
-  const totalAUM = (portfolios ?? []).reduce((sum, p) => {
-    const weights = (p.assets ?? []).reduce((s, a) => s + (a.weight ?? 0), 0);
-    return sum + weights * 1_000_000; // approximate AUM
-  }, 0);
+  // Real tracked AUM from cost-basis-derived current values — no fabrication.
+  // Portfolios without cost basis contribute 0; if none have it we show "—"
+  // rather than inventing a dollar figure from weights.
+  const trackedAUM = (portfolios ?? []).reduce((sum, p) => sum + (p.totals?.current_value ?? 0), 0);
+  const hasAUM = trackedAUM > 0;
 
   const portfolioCount = (portfolios ?? []).length;
 
@@ -63,8 +64,9 @@ export default function DashboardPage() {
           color="navy"
         />
         <MetricCard
-          label="Est. AUM"
-          value={pLoading ? "..." : `$${(totalAUM / 1_000_000).toFixed(1)}M`}
+          label="AUM (tracked)"
+          value={pLoading ? "..." : hasAUM ? `$${(trackedAUM / 1_000_000).toFixed(1)}M` : "—"}
+          sub={!pLoading && !hasAUM ? "Add cost basis to track" : undefined}
           color="teal"
         />
         <MetricCard

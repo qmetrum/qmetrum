@@ -42,7 +42,7 @@ const REPORT_TYPES = [
   {
     key: "year-end",
     title: "Year-End Review",
-    desc: "Annual performance review with monthly heatmap, risk evolution, model accuracy, and year-ahead themes.",
+    desc: "Annual performance review with monthly heatmap, risk evolution, forecast calibration, and year-ahead themes.",
     color: "#0B1D3A",
     bg: "#F0F2F5",
   },

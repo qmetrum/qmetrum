@@ -572,7 +572,7 @@ export default function AssetDetailPage() {
                 <h3 className="text-sm font-semibold text-[var(--text-primary)]">
                   Price Path Distribution
                   {scenarioMethod && !scenarioMethod.includes("fallback") && (
-                    <span className="ml-2 text-[10px] font-normal text-[var(--text-muted)]">(quantum circuit-sampled)</span>
+                    <span className="ml-2 text-[10px] font-normal text-[var(--text-muted)]">(Monte Carlo scenario paths)</span>
                   )}
                 </h3>
                 <DownloadCsvButton

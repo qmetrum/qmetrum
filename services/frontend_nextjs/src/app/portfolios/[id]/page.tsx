@@ -40,6 +40,7 @@ export default function PortfolioDetailPage() {
   const [editing, setEditing] = useState(false);
   const [editAssets, setEditAssets] = useState<PortfolioHolding[]>([]);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [newTicker, setNewTicker] = useState("");
   const [newWeight, setNewWeight] = useState("");
   const [newQuantity, setNewQuantity] = useState("");
@@ -105,6 +106,7 @@ export default function PortfolioDetailPage() {
   const saveChanges = async () => {
     if (!portfolio || editAssets.length === 0) return;
     setSaving(true);
+    setSaveError(null);
     try {
       await portfolioApi.update(id, {
         name: portfolio.name,
@@ -114,18 +116,22 @@ export default function PortfolioDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["portfolio", id] });
       queryClient.invalidateQueries({ queryKey: ["portfolio-forecast", id] });
     } catch (err) {
+      setSaveError(
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+          ?? "Couldn't save changes. Please try again.",
+      );
       console.error("Failed to update portfolio:", err);
     } finally {
       setSaving(false);
     }
   };
 
-  const { data: portfolio, isLoading: pLoading } = useQuery({
+  const { data: portfolio, isLoading: pLoading, isError: pError } = useQuery({
     queryKey: ["portfolio", id],
     queryFn: () => portfolioApi.get(id),
   });
 
-  const { data: forecastRaw, isLoading: fLoading } = useQuery({
+  const { data: forecastRaw, isLoading: fLoading, isError: fError, refetch: refetchForecast } = useQuery({
     queryKey: ["portfolio-forecast", id, horizon],
     queryFn: () =>
       portfolioApi.forecast(id, { horizon_days: horizon }, { async_mode: false }),
@@ -138,6 +144,9 @@ export default function PortfolioDetailPage() {
   const perf = summary?.performance_metrics ?? {};
   const risk = summary?.risk_metrics ?? {};
   const regime = String(summary?.regime ?? risk?.regime_latest ?? "Normal");
+  // Reads finished but no analytics came back (fetch failed / empty). Show "—"
+  // and a retry, NEVER fabricated 0.00% risk numbers, in a risk tool.
+  const analyticsFailed = !fLoading && !!portfolio && (!summary || fError);
 
   const forecastPrices = summary?.forecast_prices ?? [];
   const forecastDates = summary?.forecast_dates ?? [];
@@ -235,37 +244,49 @@ export default function PortfolioDetailPage() {
       />
 
 
+      {(analyticsFailed || pError) && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--coral)]/40 bg-[var(--coral-light)] px-4 py-3 text-sm text-[var(--coral)]">
+          <span>Portfolio analytics couldn&apos;t be loaded — the metrics below are unavailable.</span>
+          <button
+            onClick={() => refetchForecast()}
+            className="shrink-0 rounded border border-[var(--coral)] px-2.5 py-1 text-xs font-semibold hover:bg-[var(--coral)]/10"
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
       {/* Metric cards */}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
         <MetricCard
           label="Sharpe Ratio"
-          value={loading ? "..." : n(perf.sharpe_ratio ?? risk.sharpe_ratio).toFixed(2)}
+          value={loading ? "..." : analyticsFailed ? "—" :n(perf.sharpe_ratio ?? risk.sharpe_ratio).toFixed(2)}
           color="teal"
         />
         <MetricCard
           label="VaR (95%)"
-          value={loading ? "..." : `${(n(risk.var_95 ?? risk.var_95_latest) * 100).toFixed(2)}%`}
+          value={loading ? "..." : analyticsFailed ? "—" :`${(n(risk.var_95 ?? risk.var_95_latest) * 100).toFixed(2)}%`}
           color="coral"
         />
         <MetricCard
           label="Ann. Volatility"
-          value={loading ? "..." : `${(n(perf.annualized_volatility ?? risk.annualized_volatility) * 100).toFixed(1)}%`}
+          value={loading ? "..." : analyticsFailed ? "—" :`${(n(perf.annualized_volatility ?? risk.annualized_volatility) * 100).toFixed(1)}%`}
           color="amber"
         />
         <MetricCard
           label="Max Drawdown"
-          value={loading ? "..." : `${(n(perf.max_drawdown ?? risk.max_drawdown) * 100).toFixed(1)}%`}
+          value={loading ? "..." : analyticsFailed ? "—" :`${(n(perf.max_drawdown ?? risk.max_drawdown) * 100).toFixed(1)}%`}
           color="coral"
         />
         <MetricCard
           label="CDaR (95%)"
-          value={loading ? "..." : `${(n(perf.cdar_95 ?? risk.cdar_95) * 100).toFixed(1)}%`}
+          value={loading ? "..." : analyticsFailed ? "—" :`${(n(perf.cdar_95 ?? risk.cdar_95) * 100).toFixed(1)}%`}
           sub="Avg drawdown, worst 5% of days"
           color="coral"
         />
         <MetricCard
           label="Sortino"
-          value={loading ? "..." : n(perf.sortino_ratio ?? risk.sortino_ratio).toFixed(2)}
+          value={loading ? "..." : analyticsFailed ? "—" :n(perf.sortino_ratio ?? risk.sortino_ratio).toFixed(2)}
           color="blue"
         />
       </div>
@@ -610,6 +631,9 @@ export default function PortfolioDetailPage() {
                 >
                   {saving ? "Saving..." : "Save"}
                 </button>
+                {saveError && (
+                  <span className="text-xs font-medium text-[var(--coral)]">{saveError}</span>
+                )}
               </div>
             )}
           </div>
