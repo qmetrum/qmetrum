@@ -203,7 +203,7 @@ export function ScenarioPathsChart({
       </div>
 
       <ResponsiveContainer width="100%" height={height}>
-        <ComposedChart data={dataWithBands} margin={{ top: 5, right: 15, left: 10, bottom: 5 }}>
+        <ComposedChart data={dataWithBands} margin={{ top: 5, right: 15, left: 24, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
           <XAxis
             dataKey="date"

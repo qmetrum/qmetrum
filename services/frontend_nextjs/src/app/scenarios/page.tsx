@@ -602,8 +602,9 @@ export default function ScenariosPage() {
 
           {/* Portfolio selector */}
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Portfolio</label>
+            <label htmlFor="scenario-portfolio-select" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">Portfolio</label>
             <select
+              id="scenario-portfolio-select"
               value={selectedPortfolio}
               onChange={(e) => {
                 setSelectedPortfolio(e.target.value);
@@ -624,10 +625,11 @@ export default function ScenariosPage() {
           </div>
 
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">
+            <label htmlFor="scenario-portfolio-value" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1.5">
               Portfolio Value ($)
             </label>
             <input
+              id="scenario-portfolio-value"
               type="number"
               value={portfolioValue}
               onChange={(e) => setPortfolioValue(Number(e.target.value))}
@@ -637,11 +639,12 @@ export default function ScenariosPage() {
 
           {/* NL scenario translator */}
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+            <label htmlFor="scenario-nl-description" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
               Describe a scenario
             </label>
             <div className="flex gap-2">
               <input
+                id="scenario-nl-description"
                 type="text"
                 value={nlDescription}
                 onChange={(e) => setNlDescription(e.target.value)}
@@ -682,10 +685,11 @@ export default function ScenariosPage() {
 
           {/* Sliders */}
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+            <label htmlFor="scenario-equity-shock" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
               Equity Shock: <span className="text-[var(--navy)] font-bold">{equityShock}%</span>
             </label>
             <input
+              id="scenario-equity-shock"
               type="range" min={-30} max={30} step={0.5} value={equityShock}
               onChange={(e) => setEquityShock(Number(e.target.value))}
               className="w-full accent-[var(--teal)]"
@@ -693,10 +697,11 @@ export default function ScenariosPage() {
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+            <label htmlFor="scenario-vol-scale" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
               Volatility Scale: <span className="text-[var(--navy)] font-bold">{volScale.toFixed(1)}x</span>
             </label>
             <input
+              id="scenario-vol-scale"
               type="range" min={0.5} max={3} step={0.1} value={volScale}
               onChange={(e) => setVolScale(Number(e.target.value))}
               className="w-full accent-[var(--amber)]"
@@ -704,10 +709,11 @@ export default function ScenariosPage() {
           </div>
 
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+            <label htmlFor="scenario-drift-shift" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
               Drift Shift: <span className="text-[var(--navy)] font-bold">{(driftShift * 100).toFixed(2)}%</span>
             </label>
             <input
+              id="scenario-drift-shift"
               type="range" min={-0.005} max={0.005} step={0.0001} value={driftShift}
               onChange={(e) => setDriftShift(Number(e.target.value))}
               className="w-full accent-[var(--blue)]"
@@ -763,8 +769,9 @@ export default function ScenariosPage() {
 
           {/* Server built-in scenarios toggle */}
           <div className="rounded-lg bg-[var(--content-bg)] px-3 py-2.5">
-            <label className="flex cursor-pointer items-center gap-2">
+            <label htmlFor="scenario-include-builtins" className="flex cursor-pointer items-center gap-2">
               <input
+                id="scenario-include-builtins"
                 type="checkbox"
                 checked={includeBuiltins}
                 onChange={(e) => setIncludeBuiltins(e.target.checked)}

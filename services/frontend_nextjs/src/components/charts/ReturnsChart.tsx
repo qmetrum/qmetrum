@@ -129,7 +129,7 @@ export function ReturnsChart({
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
         <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#8B95A2" }} />
         <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v}%`} label={{ value: "Monthly return", angle: -90, position: "insideLeft", fontSize: 11, fill: "#8B95A2" }} />

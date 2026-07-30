@@ -52,16 +52,18 @@ export default function SettingsPage() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Firm Name</label>
+            <label htmlFor="branding-firm-name" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Firm Name</label>
             <input
+              id="branding-firm-name"
               value={branding.firmName}
               onChange={(e) => branding.update({ firmName: e.target.value })}
               className={inputCls}
             />
           </div>
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Advisor Name</label>
+            <label htmlFor="branding-advisor-name" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Advisor Name</label>
             <input
+              id="branding-advisor-name"
               value={branding.advisorName}
               onChange={(e) => branding.update({ advisorName: e.target.value })}
               className={inputCls}
@@ -71,8 +73,9 @@ export default function SettingsPage() {
 
         {/* Logo upload */}
         <div>
-          <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Firm Logo</label>
+          <label htmlFor="branding-firm-logo" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Firm Logo</label>
           <input
+            id="branding-firm-logo"
             ref={fileRef}
             type="file"
             accept="image/png,image/jpeg,image/svg+xml"
@@ -123,10 +126,11 @@ export default function SettingsPage() {
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+            <label htmlFor="alert-fragility-threshold" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
               Fragility Score Trigger
             </label>
             <input
+              id="alert-fragility-threshold"
               value={branding.fragilityThreshold}
               onChange={(e) => branding.update({ fragilityThreshold: e.target.value })}
               type="number"
@@ -138,10 +142,11 @@ export default function SettingsPage() {
             </p>
           </div>
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
+            <label htmlFor="alert-rebalance-drift" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">
               Rebalance Drift (%)
             </label>
             <input
+              id="alert-rebalance-drift"
               value={branding.rebalanceDrift}
               onChange={(e) => branding.update({ rebalanceDrift: e.target.value })}
               type="number"

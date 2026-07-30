@@ -115,7 +115,7 @@ export function CreateAlertDialog({
         </h2>
 
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+          <label htmlFor="alert-ticker" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
             Ticker
           </label>
           {singleTicker ? (
@@ -124,6 +124,7 @@ export function CreateAlertDialog({
             </div>
           ) : (
             <select
+              id="alert-ticker"
               value={ticker}
               onChange={(e) => setTicker(e.target.value)}
               className="w-full rounded border border-[var(--card-border)] bg-[var(--content-bg)] px-3 py-2 text-sm text-[var(--text-primary)]"
@@ -138,10 +139,11 @@ export function CreateAlertDialog({
         </div>
 
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+          <label htmlFor="alert-type" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
             Alert Type
           </label>
           <select
+            id="alert-type"
             value={alertType}
             onChange={(e) => setAlertType(e.target.value as "price_threshold" | "anomaly")}
             className="w-full rounded border border-[var(--card-border)] bg-[var(--content-bg)] px-3 py-2 text-sm text-[var(--text-primary)]"
@@ -159,10 +161,11 @@ export function CreateAlertDialog({
 
         <div className={`grid grid-cols-2 gap-3 ${isAnomaly ? "hidden" : ""}`}>
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+            <label htmlFor="alert-direction" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
               Direction
             </label>
             <select
+              id="alert-direction"
               value={direction}
               onChange={(e) => setDirection(e.target.value as "above" | "below")}
               className="w-full rounded border border-[var(--card-border)] bg-[var(--content-bg)] px-3 py-2 text-sm text-[var(--text-primary)]"
@@ -172,10 +175,11 @@ export function CreateAlertDialog({
             </select>
           </div>
           <div>
-            <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+            <label htmlFor="alert-threshold" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
               Threshold ($)
             </label>
             <input
+              id="alert-threshold"
               type="number"
               step="0.01"
               value={threshold}
@@ -186,10 +190,11 @@ export function CreateAlertDialog({
         </div>
 
         <div>
-          <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+          <label htmlFor="alert-name" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
             Name (optional)
           </label>
           <input
+            id="alert-name"
             type="text"
             placeholder={`${ticker} ${direction} ${threshold || "…"}`}
             value={name}

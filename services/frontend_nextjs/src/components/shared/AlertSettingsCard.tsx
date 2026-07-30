@@ -92,8 +92,9 @@ export function AlertSettingsCard({ title = "Alert Settings" }: { title?: string
 
       <div className="space-y-5 p-5">
         {/* Email on/off */}
-        <label className="flex items-start gap-3">
+        <label htmlFor="alert-email-enabled" className="flex items-start gap-3">
           <input
+            id="alert-email-enabled"
             type="checkbox"
             checked={draft.email_enabled}
             onChange={(e) => save.mutate({ email_enabled: e.target.checked })}
@@ -109,10 +110,11 @@ export function AlertSettingsCard({ title = "Alert Settings" }: { title?: string
 
         {/* Sensitivity */}
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          <label htmlFor="alert-min-severity" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
             How much to send
           </label>
           <select
+            id="alert-min-severity"
             value={draft.min_severity}
             onChange={(e) => save.mutate({ min_severity: e.target.value as AlertSeverity })}
             className="w-full rounded border border-[var(--card-border)] bg-[var(--content-bg)] px-3 py-2 text-sm"
@@ -127,8 +129,9 @@ export function AlertSettingsCard({ title = "Alert Settings" }: { title?: string
 
         {/* Quiet hours */}
         <div>
-          <label className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          <label htmlFor="alert-quiet-hours" className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
             <input
+              id="alert-quiet-hours"
               type="checkbox"
               checked={quietOn}
               onChange={(e) =>
@@ -204,13 +207,14 @@ export function AlertSettingsCard({ title = "Alert Settings" }: { title?: string
 
         {/* Auto-mute */}
         <div>
-          <label className="mb-1 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
+          <label htmlFor="alert-auto-mute" className="mb-1 block text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)]">
             Auto-mute
           </label>
           <div className="flex items-center gap-2">
             {/* Uncontrolled so typing is not fought by the server value; keyed
                 so it resets if the stored setting changes elsewhere. */}
             <input
+              id="alert-auto-mute"
               key={`automute-${draft.auto_mute_after}`}
               type="number"
               min={0}

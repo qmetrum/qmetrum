@@ -255,8 +255,8 @@ export default function ReportsPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Client Portfolio</label>
-              <select value={portfolioId} onChange={(e) => setPortfolioId(e.target.value)} className={inputCls}>
+              <label htmlFor="report-client-portfolio" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Client Portfolio</label>
+              <select id="report-client-portfolio" value={portfolioId} onChange={(e) => setPortfolioId(e.target.value)} className={inputCls}>
                 <option value="">Select...</option>
                 {(portfolios ?? []).map((p: PortfolioResponse) => (
                   <option key={p.portfolio_id} value={String(p.portfolio_id)}>
@@ -266,16 +266,16 @@ export default function ReportsPage() {
               </select>
             </div>
             <div>
-              <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Portfolio Value ($)</label>
-              <input value={portfolioValue} onChange={(e) => setPortfolioValue(e.target.value)} placeholder="e.g. 2450000" className={inputCls} />
+              <label htmlFor="report-portfolio-value" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Portfolio Value ($)</label>
+              <input id="report-portfolio-value" value={portfolioValue} onChange={(e) => setPortfolioValue(e.target.value)} placeholder="e.g. 2450000" className={inputCls} />
             </div>
             <div>
-              <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Advisor Name</label>
-              <input value={advisorName} onChange={(e) => setAdvisorName(e.target.value)} className={inputCls} />
+              <label htmlFor="report-advisor-name" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Advisor Name</label>
+              <input id="report-advisor-name" value={advisorName} onChange={(e) => setAdvisorName(e.target.value)} className={inputCls} />
             </div>
             <div>
-              <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Firm Name</label>
-              <input value={firmName} onChange={(e) => setFirmName(e.target.value)} className={inputCls} />
+              <label htmlFor="report-firm-name" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Firm Name</label>
+              <input id="report-firm-name" value={firmName} onChange={(e) => setFirmName(e.target.value)} className={inputCls} />
             </div>
           </div>
 
@@ -283,8 +283,8 @@ export default function ReportsPage() {
           {selected === "onboarding" && (
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Risk Tolerance</label>
-                <select value={riskTolerance} onChange={(e) => setRiskTolerance(e.target.value)} className={inputCls}>
+                <label htmlFor="onboarding-risk-tolerance" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Risk Tolerance</label>
+                <select id="onboarding-risk-tolerance" value={riskTolerance} onChange={(e) => setRiskTolerance(e.target.value)} className={inputCls}>
                   <option>Conservative</option>
                   <option>Moderate</option>
                   <option>Growth</option>
@@ -292,8 +292,8 @@ export default function ReportsPage() {
                 </select>
               </div>
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Target Vol (%)</label>
-                <input value={targetVol} onChange={(e) => setTargetVol(e.target.value)} type="number" className={inputCls} />
+                <label htmlFor="onboarding-target-vol" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Target Vol (%)</label>
+                <input id="onboarding-target-vol" value={targetVol} onChange={(e) => setTargetVol(e.target.value)} type="number" className={inputCls} />
               </div>
             </div>
           )}
@@ -302,17 +302,17 @@ export default function ReportsPage() {
             <div className="space-y-3">
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Event Name</label>
-                  <input value={eventName} onChange={(e) => setEventName(e.target.value)} placeholder="e.g. Fed Rate Decision" className={inputCls} />
+                  <label htmlFor="event-name" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Event Name</label>
+                  <input id="event-name" value={eventName} onChange={(e) => setEventName(e.target.value)} placeholder="e.g. Fed Rate Decision" className={inputCls} />
                 </div>
                 <div>
-                  <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Event Date</label>
-                  <input value={eventDate} onChange={(e) => setEventDate(e.target.value)} type="date" className={inputCls} />
+                  <label htmlFor="event-date" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Event Date</label>
+                  <input id="event-date" value={eventDate} onChange={(e) => setEventDate(e.target.value)} type="date" className={inputCls} />
                 </div>
               </div>
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Event Summary</label>
-                <textarea value={eventSummary} onChange={(e) => setEventSummary(e.target.value)} rows={3} className={inputCls} placeholder="Brief description of the market event..." />
+                <label htmlFor="event-summary" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Event Summary</label>
+                <textarea id="event-summary" value={eventSummary} onChange={(e) => setEventSummary(e.target.value)} rows={3} className={inputCls} placeholder="Brief description of the market event..." />
               </div>
             </div>
           )}
@@ -354,12 +354,12 @@ export default function ReportsPage() {
                 )}
               </div>
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Rebalancing Rationale</label>
-                <textarea value={rationale} onChange={(e) => setRationale(e.target.value)} rows={3} className={inputCls} placeholder="Why rebalance now..." />
+                <label htmlFor="rebalancing-rationale" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Rebalancing Rationale</label>
+                <textarea id="rebalancing-rationale" value={rationale} onChange={(e) => setRationale(e.target.value)} rows={3} className={inputCls} placeholder="Why rebalance now..." />
               </div>
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Tax Considerations (optional)</label>
-                <textarea value={taxNotes} onChange={(e) => setTaxNotes(e.target.value)} rows={2} className={inputCls} placeholder="e.g. harvesting losses in taxable account..." />
+                <label htmlFor="rebalancing-tax-notes" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Tax Considerations (optional)</label>
+                <textarea id="rebalancing-tax-notes" value={taxNotes} onChange={(e) => setTaxNotes(e.target.value)} rows={2} className={inputCls} placeholder="e.g. harvesting losses in taxable account..." />
               </div>
             </div>
           )}
@@ -367,16 +367,16 @@ export default function ReportsPage() {
           {selected === "year-end" && (
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Review Year</label>
-                <input value={reviewYear} onChange={(e) => setReviewYear(e.target.value)} type="number" className={inputCls} />
+                <label htmlFor="year-end-review-year" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Review Year</label>
+                <input id="year-end-review-year" value={reviewYear} onChange={(e) => setReviewYear(e.target.value)} type="number" className={inputCls} />
               </div>
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Start Value ($, optional)</label>
-                <input value={valueStart} onChange={(e) => setValueStart(e.target.value)} type="number" className={inputCls} placeholder="omit to skip $ figures" />
+                <label htmlFor="year-end-start-value" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Start Value ($, optional)</label>
+                <input id="year-end-start-value" value={valueStart} onChange={(e) => setValueStart(e.target.value)} type="number" className={inputCls} placeholder="omit to skip $ figures" />
               </div>
               <div>
-                <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">End Value ($, optional)</label>
-                <input value={valueEnd} onChange={(e) => setValueEnd(e.target.value)} type="number" className={inputCls} />
+                <label htmlFor="year-end-end-value" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">End Value ($, optional)</label>
+                <input id="year-end-end-value" value={valueEnd} onChange={(e) => setValueEnd(e.target.value)} type="number" className={inputCls} />
               </div>
             </div>
           )}

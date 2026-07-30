@@ -120,7 +120,7 @@ export function DrawdownChart({
 
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 10, bottom: 5 }}>
+      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
         <XAxis
           dataKey="date"

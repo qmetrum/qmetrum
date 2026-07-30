@@ -798,10 +798,11 @@ export default function AssetDetailPage() {
             </h2>
 
             <div>
-              <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+              <label htmlFor="add-portfolio-select" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
                 Portfolio
               </label>
               <select
+                id="add-portfolio-select"
                 value={selectedPortfolioId}
                 onChange={(e) =>
                   setSelectedPortfolioId(e.target.value === "new" ? "new" : parseInt(e.target.value))
@@ -819,10 +820,11 @@ export default function AssetDetailPage() {
 
             {selectedPortfolioId === "new" && (
               <div>
-                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+                <label htmlFor="add-portfolio-name" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
                   Portfolio Name
                 </label>
                 <input
+                  id="add-portfolio-name"
                   type="text"
                   placeholder={`Portfolio with ${ticker}`}
                   value={newPortfolioName}
@@ -834,10 +836,11 @@ export default function AssetDetailPage() {
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+                <label htmlFor="add-portfolio-weight" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
                   Weight %
                 </label>
                 <input
+                  id="add-portfolio-weight"
                   type="number"
                   step="0.1"
                   value={addWeight}
@@ -846,10 +849,11 @@ export default function AssetDetailPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
+                <label htmlFor="add-portfolio-quantity" className="text-xs font-semibold uppercase tracking-wider text-[var(--text-muted)] block mb-1">
                   Quantity
                 </label>
                 <input
+                  id="add-portfolio-quantity"
                   type="number"
                   step="1"
                   value={addQuantity}

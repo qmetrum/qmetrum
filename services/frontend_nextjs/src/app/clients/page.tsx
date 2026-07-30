@@ -201,8 +201,9 @@ export default function ClientsPage() {
             </p>
           )}
           <div>
-            <label className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Portfolio name</label>
+            <label htmlFor="import-portfolio-name" className="text-xs font-semibold text-[var(--text-muted)] block mb-1">Portfolio name</label>
             <input
+              id="import-portfolio-name"
               value={importName}
               onChange={(e) => setImportName(e.target.value)}
               className="w-full max-w-sm rounded-lg border border-[var(--border)] bg-white px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--teal)]"
