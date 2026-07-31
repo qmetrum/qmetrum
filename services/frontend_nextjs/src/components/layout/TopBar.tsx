@@ -8,7 +8,7 @@ import { useBranding } from "@/components/providers/BrandingProvider";
 import { cognitoLogoutUrl } from "@/lib/auth";
 import { NotificationBell } from "@/components/layout/NotificationBell";
 
-export function TopBar() {
+export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const router = useRouter();
   const branding = useBranding();
   const auth = useAuth();
@@ -46,7 +46,14 @@ export function TopBar() {
   }
 
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b border-[var(--border)] bg-white px-6">
+    <header className="sticky top-0 z-30 flex h-14 items-center gap-4 border-b border-[var(--border)] bg-white px-4 sm:px-6">
+      <button
+        onClick={onOpenMobileNav}
+        aria-label="Open navigation"
+        className="-ml-1 rounded-lg p-2 text-[var(--text-secondary)] transition-colors hover:bg-[var(--content-bg)] lg:hidden"
+      >
+        <MenuIcon className="h-5 w-5" />
+      </button>
       {/* Search */}
       <div ref={ref} className="relative w-full max-w-md">
         <div className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--content-bg)] px-3 py-1.5">
@@ -129,6 +136,16 @@ function SearchIcon({ className }: { className?: string }) {
     <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
       <circle cx="11" cy="11" r="8" />
       <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+function MenuIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="18" x2="21" y2="18" />
     </svg>
   );
 }

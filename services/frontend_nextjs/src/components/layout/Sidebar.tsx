@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
 import { useBranding } from "@/components/providers/BrandingProvider";
 
 const NAV = [
@@ -25,73 +24,90 @@ function BellIcon({ className }: { className?: string }) {
   );
 }
 
-export function Sidebar() {
+type SidebarProps = {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+};
+
+export function Sidebar({ collapsed, onToggleCollapse, mobileOpen, onCloseMobile }: SidebarProps) {
   const pathname = usePathname();
-  const [collapsed, setCollapsed] = useState(false);
   const branding = useBranding();
 
   return (
-    <aside
-      className={`fixed inset-y-0 left-0 z-40 flex flex-col transition-all duration-200
-        ${collapsed ? "w-[68px]" : "w-[240px]"}
-        bg-[var(--sidebar-bg)] border-r border-[var(--sidebar-border)]`}
-    >
-      {/* Logo */}
-      <div className="flex h-16 items-center gap-3 px-5 border-b border-[var(--sidebar-border)]">
-        {branding.logoDataUrl ? (
-          <img
-            src={branding.logoDataUrl}
-            alt="Firm logo"
-            className="h-8 w-8 shrink-0 rounded-lg object-contain bg-white p-0.5"
-          />
-        ) : (
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--teal)]">
-            <span className="text-sm font-bold text-white">
-              {branding.firmName?.[0]?.toUpperCase() ?? "Q"}
-            </span>
-          </div>
-        )}
-        {!collapsed && (
-          <span className="text-base font-semibold text-white tracking-tight truncate">
+    <>
+      {/* Mobile backdrop (below lg) */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
+          onClick={onCloseMobile}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={`fixed inset-y-0 left-0 z-40 flex flex-col transition-transform duration-200
+          w-[240px] ${collapsed ? "lg:w-[68px]" : "lg:w-[240px]"}
+          ${mobileOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0
+          bg-[var(--sidebar-bg)] border-r border-[var(--sidebar-border)]`}
+      >
+        {/* Logo */}
+        <div className="flex h-16 items-center gap-3 px-5 border-b border-[var(--sidebar-border)]">
+          {branding.logoDataUrl ? (
+            <img
+              src={branding.logoDataUrl}
+              alt="Firm logo"
+              className="h-8 w-8 shrink-0 rounded-lg object-contain bg-white p-0.5"
+            />
+          ) : (
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--teal)]">
+              <span className="text-sm font-bold text-white">
+                {branding.firmName?.[0]?.toUpperCase() ?? "Q"}
+              </span>
+            </div>
+          )}
+          {/* On lg the label hides when collapsed; the mobile drawer always shows it */}
+          <span className={`truncate text-base font-semibold tracking-tight text-white ${collapsed ? "lg:hidden" : ""}`}>
             {branding.firmName || "Qsight"}
           </span>
-        )}
-      </div>
+        </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
-        {NAV.map(({ href, label, icon: Icon }) => {
-          const active =
-            pathname === href || pathname.startsWith(href + "/");
-          return (
-            <Link
-              key={href}
-              href={href}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
-                ${
-                  active
-                    ? "bg-[var(--sidebar-active)] text-white"
-                    : "text-[var(--sidebar-text)] hover:bg-[var(--sidebar-hover)] hover:text-white"
-                }`}
-            >
-              <Icon className="h-[18px] w-[18px] shrink-0" />
-              {!collapsed && label}
-            </Link>
-          );
-        })}
-      </nav>
+        {/* Navigation */}
+        <nav className="flex-1 px-3 py-4 space-y-1">
+          {NAV.map(({ href, label, icon: Icon }) => {
+            const active = pathname === href || pathname.startsWith(href + "/");
+            return (
+              <Link
+                key={href}
+                href={href}
+                onClick={onCloseMobile}
+                aria-current={active ? "page" : undefined}
+                className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors
+                  ${
+                    active
+                      ? "bg-[var(--sidebar-active)] text-white"
+                      : "text-[var(--sidebar-text)] hover:bg-[var(--sidebar-hover)] hover:text-white"
+                  }`}
+              >
+                <Icon className="h-[18px] w-[18px] shrink-0" />
+                <span className={collapsed ? "lg:hidden" : ""}>{label}</span>
+              </Link>
+            );
+          })}
+        </nav>
 
-      {/* Collapse toggle */}
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-        className="mx-3 mb-4 flex items-center justify-center rounded-lg py-2 text-[var(--sidebar-text)] hover:bg-[var(--sidebar-hover)] hover:text-white transition-colors"
-      >
-        <ChevronIcon
-          className={`h-4 w-4 transition-transform ${collapsed ? "rotate-180" : ""}`}
-        />
-      </button>
-    </aside>
+        {/* Collapse toggle (desktop only; mobile uses the drawer backdrop) */}
+        <button
+          onClick={onToggleCollapse}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="mx-3 mb-4 hidden items-center justify-center rounded-lg py-2 text-[var(--sidebar-text)] transition-colors hover:bg-[var(--sidebar-hover)] hover:text-white lg:flex"
+        >
+          <ChevronIcon
+            className={`h-4 w-4 transition-transform ${collapsed ? "rotate-180" : ""}`}
+          />
+        </button>
+      </aside>
+    </>
   );
 }
 
