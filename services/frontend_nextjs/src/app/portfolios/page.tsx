@@ -82,6 +82,9 @@ export default function PortfoliosPage() {
                           >
                             {deleteMutation.isPending ? "..." : "Confirm"}
                           </button>
+                          {deleteMutation.isError && (
+                            <span className="text-[10px] font-medium text-[var(--coral)]">failed</span>
+                          )}
                           <button
                             onClick={() => setConfirmId(null)}
                             className="text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-secondary)]"

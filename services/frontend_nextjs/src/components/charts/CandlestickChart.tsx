@@ -9,6 +9,18 @@ import {
   type Time,
 } from "lightweight-charts";
 import { buildOhlc, type AggregationPeriod } from "@/lib/candlesticks";
+import { useBranding } from "@/components/providers/BrandingProvider";
+
+// lightweight-charts isn't CSS-driven, so axis/grid/text colors must be set in
+// JS and re-applied on theme toggle (values mirror the --text-secondary /
+// --card-border tokens for each theme).
+function themeColors(isDark: boolean) {
+  return {
+    text: isDark ? "#8B95A8" : "#5A6270",
+    grid: isDark ? "#1E2A3E" : "#EEF0F3",
+    border: isDark ? "#1E2A3E" : "#E2E6EB",
+  };
+}
 
 type Props = {
   historyPrices: number[];
@@ -27,6 +39,8 @@ export function CandlestickChart({
   period = "weekly",
   height = 320,
 }: Props) {
+  const branding = useBranding();
+  const dark = branding.theme === "dark";
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const histSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -90,6 +104,19 @@ export function CandlestickChart({
       fcSeriesRef.current = null;
     };
   }, [height]);
+
+  // Re-theme axes/grid/text on light↔dark toggle without recreating the chart.
+  useEffect(() => {
+    const c = chartRef.current;
+    if (!c) return;
+    const tc = themeColors(dark);
+    c.applyOptions({
+      layout: { textColor: tc.text },
+      grid: { vertLines: { color: tc.grid }, horzLines: { color: tc.grid } },
+      rightPriceScale: { borderColor: tc.border },
+      timeScale: { borderColor: tc.border },
+    });
+  }, [dark]);
 
   // Update data whenever bars change
   useEffect(() => {

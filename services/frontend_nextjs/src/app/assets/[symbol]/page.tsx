@@ -76,6 +76,7 @@ export default function AssetDetailPage() {
   const [selectedPortfolioId, setSelectedPortfolioId] = useState<number | "new">("new");
   const [newPortfolioName, setNewPortfolioName] = useState("");
   const [addSaving, setAddSaving] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   // ── Data fetching ──
   const { data: profile, isLoading: profileLoading } = useQuery<AssetProfileResponse>({
@@ -155,6 +156,7 @@ export default function AssetDetailPage() {
   // ── Add to portfolio handler ──
   const handleAddToPortfolio = async () => {
     setAddSaving(true);
+    setAddError(null);
     try {
       if (selectedPortfolioId === "new") {
         const name = newPortfolioName.trim() || `Portfolio with ${ticker}`;
@@ -193,6 +195,10 @@ export default function AssetDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["portfolios-list"] });
       setShowAddModal(false);
     } catch (err) {
+      setAddError(
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
+          ?? "Couldn't add to portfolio. Please try again.",
+      );
       console.error("Failed to add to portfolio:", err);
     } finally {
       setAddSaving(false);
@@ -878,6 +884,9 @@ export default function AssetDetailPage() {
                 {addSaving ? "Adding..." : "Add"}
               </button>
             </div>
+            {addError && (
+              <p className="mt-2 text-right text-xs font-medium text-[var(--coral)]">{addError}</p>
+            )}
           </div>
         </div>
       )}
