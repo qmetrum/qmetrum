@@ -82,6 +82,8 @@ export function NotificationBell({ enabled }: { enabled: boolean }) {
       <button
         onClick={toggle}
         aria-label={unread > 0 ? `${unread} new alerts` : "Alerts"}
+        aria-expanded={open}
+        aria-haspopup="menu"
         className="relative rounded-lg p-2 text-[var(--text-secondary)] hover:bg-[var(--content-bg)] transition-colors"
       >
         <BellIcon className="h-5 w-5" />

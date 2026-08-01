@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "react-oidc-context";
 import { assetApi, type AssetSearchResult } from "@/lib/api";
@@ -15,6 +15,7 @@ export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<AssetSearchResult[]>([]);
   const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -29,11 +30,12 @@ export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
   function onSearch(q: string) {
     setQuery(q);
     if (timer.current) clearTimeout(timer.current);
-    if (q.trim().length < 1) { setResults([]); setOpen(false); return; }
+    if (q.trim().length < 1) { setResults([]); setOpen(false); setActiveIndex(-1); return; }
     timer.current = setTimeout(async () => {
       try {
         const res = await assetApi.search(q.trim(), 6);
         setResults(res.items ?? []);
+        setActiveIndex(-1);
         setOpen(true);
       } catch { setResults([]); }
     }, 200);
@@ -43,6 +45,24 @@ export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
     setOpen(false);
     setQuery("");
     router.push(`/assets/${symbol}`);
+  }
+
+  function onSearchKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (results.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setOpen(true);
+      setActiveIndex((i) => Math.min(i + 1, results.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === "Enter" && activeIndex >= 0) {
+      e.preventDefault();
+      pick(results[activeIndex].symbol);
+    } else if (e.key === "Escape") {
+      setOpen(false);
+      setActiveIndex(-1);
+    }
   }
 
   return (
@@ -61,23 +81,39 @@ export function TopBar({ onOpenMobileNav }: { onOpenMobileNav: () => void }) {
           <input
             value={query}
             onChange={(e) => onSearch(e.target.value)}
+            onKeyDown={onSearchKeyDown}
             placeholder="Search assets..."
+            aria-label="Search assets"
+            role="combobox"
+            aria-expanded={open && results.length > 0}
+            aria-controls="asset-search-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={activeIndex >= 0 ? `asset-opt-${activeIndex}` : undefined}
             className="w-full bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] outline-none"
           />
         </div>
         {open && results.length > 0 && (
-          <div className="absolute top-full left-0 mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--card-bg)] shadow-lg overflow-hidden">
-            {results.map((r) => (
-              <button
-                key={r.symbol}
-                onClick={() => pick(r.symbol)}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-[var(--content-bg)] transition-colors"
-              >
-                <span className="font-semibold text-[var(--navy)]">{r.symbol}</span>
-                <span className="truncate text-[var(--text-secondary)]">{r.name}</span>
-              </button>
+          <ul
+            id="asset-search-listbox"
+            role="listbox"
+            aria-label="Asset search results"
+            className="absolute top-full left-0 mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--card-bg)] shadow-lg overflow-hidden"
+          >
+            {results.map((r, i) => (
+              <li key={r.symbol} id={`asset-opt-${i}`} role="option" aria-selected={i === activeIndex}>
+                <button
+                  onClick={() => pick(r.symbol)}
+                  onMouseEnter={() => setActiveIndex(i)}
+                  className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
+                    i === activeIndex ? "bg-[var(--content-bg)]" : "hover:bg-[var(--content-bg)]"
+                  }`}
+                >
+                  <span className="font-semibold text-[var(--navy)]">{r.symbol}</span>
+                  <span className="truncate text-[var(--text-secondary)]">{r.name}</span>
+                </button>
+              </li>
             ))}
-          </div>
+          </ul>
         )}
       </div>
 
