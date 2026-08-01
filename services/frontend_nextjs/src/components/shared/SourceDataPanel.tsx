@@ -50,7 +50,7 @@ function Row({ label, value, depth = 0 }: { label: string; value: unknown; depth
           {value.map((v, i) => (
             <div
               key={i}
-              className="rounded border border-[var(--card-border)] bg-white px-2 py-1"
+              className="rounded border border-[var(--card-border)] bg-[var(--card-bg)] px-2 py-1"
             >
               {typeof v === "object" && v !== null ? (
                 <KeyValueTree data={v as Record<string, unknown>} depth={0} />

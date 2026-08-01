@@ -60,7 +60,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
 
   if (!auth.isAuthenticated) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white">
+      <div className="flex min-h-screen items-center justify-center bg-[var(--content-bg)]">
         <div className="flex items-center gap-3 text-sm text-[var(--text-muted)]">
           <span className="inline-block h-2 w-2 rounded-full bg-[var(--teal)] animate-pulse" />
           Redirecting to sign-in…

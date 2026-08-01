@@ -44,9 +44,8 @@ type Row = {
   forecast?: number;
   forecastLower?: number;
   forecastUpper?: number;
-  /** Band width fields for recharts stacked-area rendering: */
-  bandFloor?: number;
-  bandWidth?: number;
+  /** Range-array [lower, upper] for a single sign-safe recharts band Area. */
+  band?: number[];
 };
 
 export function DrawdownChart({
@@ -87,15 +86,13 @@ export function DrawdownChart({
       const up = fUp?.[i];
       const bandFloor = typeof lo === "number" ? +(lo * 100).toFixed(2) : undefined;
       const bandTop = typeof up === "number" ? +(up * 100).toFixed(2) : undefined;
-      const bandWidth =
-        bandFloor !== undefined && bandTop !== undefined ? +(bandTop - bandFloor).toFixed(2) : undefined;
       data.push({
         date: fcDates[i] ?? `f-${i}`,
         forecast: +(fv![i] * 100).toFixed(2),
         forecastLower: bandFloor,
         forecastUpper: bandTop,
-        bandFloor,
-        bandWidth,
+        // Single range-array band [lower, upper]; sign-safe for negative drawdowns.
+        band: bandFloor !== undefined && bandTop !== undefined ? [bandFloor, bandTop] : undefined,
       });
     }
   } else {
@@ -139,35 +136,26 @@ export function DrawdownChart({
         <Tooltip
           contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #E2E6EB" }}
           labelFormatter={(v) => new Date(v as string).toLocaleDateString()}
-          // recharts' Formatter<number, string> declares value as `number | undefined`
-          // but our handler accepts `number`; matches existing ForecastChart/VolatilityChart pattern.
           // @ts-expect-error recharts Formatter typing quirk
-          formatter={(value: number) => [`${Number(value ?? 0).toFixed(2)}%`, ""]}
+          formatter={(value: number | number[], name: string) => {
+            if (Array.isArray(value)) return [`${value[0].toFixed(1)}% to ${value[1].toFixed(1)}%`, "Forecast CI"];
+            const label = name === "historical" ? "Drawdown" : name === "forecast" ? "Forecast" : "";
+            return [`${Number(value ?? 0).toFixed(2)}%`, label];
+          }}
         />
         {useBackend && <Legend wrapperStyle={{ fontSize: 11 }} iconType="line" />}
 
-        {/* Forecast uncertainty band (stacked area: transparent floor + coloured width) */}
+        {/* Forecast uncertainty band: a single range-array Area (sign-safe). */}
         {useBackend && (
-          <>
-            <Area
-              dataKey="bandFloor"
-              stackId="band"
-              stroke="none"
-              fill="none"
-              isAnimationActive={false}
-              legendType="none"
-              activeDot={false}
-            />
-            <Area
-              dataKey="bandWidth"
-              stackId="band"
-              stroke="none"
-              fill="#C0392B"
-              fillOpacity={0.10}
-              isAnimationActive={false}
-              name="Forecast CI"
-            />
-          </>
+          <Area
+            dataKey="band"
+            stroke="none"
+            fill="#C0392B"
+            fillOpacity={0.12}
+            isAnimationActive={false}
+            name="Forecast CI"
+            connectNulls={false}
+          />
         )}
 
         {/* Historical line (filled area) */}
