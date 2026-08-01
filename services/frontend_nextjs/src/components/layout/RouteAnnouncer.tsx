@@ -26,7 +26,12 @@ export function RouteAnnouncer() {
   const pathname = usePathname();
   const [msg, setMsg] = useState("");
   useEffect(() => {
-    if (pathname) setMsg(`${pageName(pathname)} loaded`);
+    if (!pathname) return;
+    const name = pageName(pathname);
+    setMsg(`${name} loaded`);
+    // Per-route browser tab title (pages are client components and can't export
+    // metadata) — replaces the single static title on every route.
+    document.title = `${name} · Qsight`;
   }, [pathname]);
   return (
     <div role="status" aria-live="polite" className="sr-only">

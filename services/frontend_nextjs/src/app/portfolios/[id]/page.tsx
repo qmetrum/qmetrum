@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   portfolioApi,
   type PortfolioResponse,
@@ -125,6 +125,18 @@ export default function PortfolioDetailPage() {
       setSaving(false);
     }
   };
+
+  // Warn before leaving (refresh/close/external nav) with the holdings editor
+  // open, so in-progress edits aren't silently discarded.
+  useEffect(() => {
+    if (!editing) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [editing]);
 
   const normalizeWeights = () => {
     const sum = editAssets.reduce((s, a) => s + (a.weight ?? 0), 0);
