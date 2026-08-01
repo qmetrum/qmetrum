@@ -128,8 +128,9 @@ export function ReturnsChart({
   const firstForecastIdx = hasForecast ? data.findIndex((r) => r.isForecast) : -1;
 
   return (
+    <div role="img" aria-label="Monthly returns bar chart.">
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
+      <ComposedChart accessibilityLayer data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
         <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#8B95A2" }} />
         <YAxis tick={{ fontSize: 10, fill: "#8B95A2" }} tickFormatter={(v) => `${v}%`} label={{ value: "Monthly return", angle: -90, position: "insideLeft", fontSize: 11, fill: "#8B95A2" }} />
@@ -192,5 +193,6 @@ export function ReturnsChart({
         </Bar>
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 }

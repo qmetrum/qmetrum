@@ -9,6 +9,7 @@ import {
   Tooltip,
   CartesianGrid,
   ReferenceLine,
+  Legend,
 } from "recharts";
 import { simpleMovingAverage } from "@/lib/finance";
 
@@ -73,8 +74,9 @@ export function MovingAverageChart({
   };
 
   return (
+    <div role="img" aria-label="Price chart with moving averages over time.">
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
+      <ComposedChart accessibilityLayer data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
         <XAxis
           dataKey="date"
@@ -106,7 +108,9 @@ export function MovingAverageChart({
         {todayDate && (
           <ReferenceLine x={todayDate} stroke="#8B95A2" strokeWidth={1} strokeDasharray="4 3" />
         )}
+        <Legend />
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 }

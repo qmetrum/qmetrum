@@ -67,8 +67,9 @@ function RiskReturnScatter({
       <div className="mb-1 text-[11px] font-medium text-[var(--text-secondary)]">
         Risk vs return — <span className="font-semibold">up‑and‑left is better</span> (higher Sharpe, shallower drawdown). No dot dominates.
       </div>
+      <div role="img" aria-label="Risk versus return scatter of allocation methods: Sharpe ratio on the vertical axis versus maximum drawdown on the horizontal axis.">
       <ResponsiveContainer width="100%" height={230}>
-        <ScatterChart margin={{ top: 16, right: 24, bottom: 24, left: 4 }}>
+        <ScatterChart accessibilityLayer margin={{ top: 16, right: 24, bottom: 24, left: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="var(--card-border)" />
           <XAxis
             type="number" dataKey="x" name="Max Drawdown" unit="%"
@@ -102,6 +103,7 @@ function RiskReturnScatter({
           </Scatter>
         </ScatterChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }

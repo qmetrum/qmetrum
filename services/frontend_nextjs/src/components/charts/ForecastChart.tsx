@@ -10,6 +10,7 @@ import {
   Tooltip,
   CartesianGrid,
   ReferenceLine,
+  Legend,
 } from "recharts";
 
 type ForecastChartProps = {
@@ -91,8 +92,9 @@ export function ForecastChart({
 
   return (
     <div className="w-full">
+    <div role="img" aria-label="Price forecast chart: recent price history, the projected path, and a modeled 95 percent uncertainty band.">
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
+      <ComposedChart accessibilityLayer data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
         <XAxis
           dataKey="date"
@@ -120,6 +122,7 @@ export function ForecastChart({
             return [formatted, labels[key] ?? key];
           }}
         />
+        <Legend />
 
         {/* 95% confidence band: a single range area between lower and upper.
             No white-mask trick, so it renders correctly on dark backgrounds. */}
@@ -169,6 +172,7 @@ export function ForecastChart({
         )}
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
       <p className="mt-1 px-2 text-[10px] leading-snug text-[var(--text-muted)]">
         Shaded band = modeled 95% range (Monte Carlo) — an uncertainty estimate, not a prediction.
       </p>

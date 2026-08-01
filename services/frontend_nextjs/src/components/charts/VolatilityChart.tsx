@@ -10,6 +10,7 @@ import {
   Tooltip,
   CartesianGrid,
   ReferenceLine,
+  Legend,
 } from "recharts";
 
 type VolatilityChartProps = {
@@ -118,8 +119,9 @@ export function VolatilityChart({
   };
 
   return (
+    <div role="img" aria-label="Annualized volatility over time with GARCH volatility forecast and confidence cone.">
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
+      <ComposedChart accessibilityLayer data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
         <XAxis
           dataKey="date"
@@ -143,6 +145,7 @@ export function VolatilityChart({
             return [`${value?.toFixed(1)}%`, labels[name] ?? name];
           }}
         />
+        <Legend />
 
         {/* Forecast vol cone band (stacked area: transparent floor + shaded width) */}
         <Area
@@ -178,5 +181,6 @@ export function VolatilityChart({
         )}
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 }

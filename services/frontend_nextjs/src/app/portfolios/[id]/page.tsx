@@ -245,7 +245,7 @@ export default function PortfolioDetailPage() {
 
 
       {(analyticsFailed || pError) && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--coral)]/40 bg-[var(--coral-light)] px-4 py-3 text-sm text-[var(--coral)]">
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-[var(--coral)]/40 bg-[var(--coral-light)] px-4 py-3 text-sm text-[var(--coral)]">
           <span>Portfolio analytics couldn&apos;t be loaded — the metrics below are unavailable.</span>
           <button
             onClick={() => refetchForecast()}
@@ -632,7 +632,7 @@ export default function PortfolioDetailPage() {
                   {saving ? "Saving..." : "Save"}
                 </button>
                 {saveError && (
-                  <span className="text-xs font-medium text-[var(--coral)]">{saveError}</span>
+                  <span role="alert" className="text-xs font-medium text-[var(--coral)]">{saveError}</span>
                 )}
               </div>
             )}

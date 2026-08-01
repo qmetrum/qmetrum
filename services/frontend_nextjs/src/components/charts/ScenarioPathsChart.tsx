@@ -202,8 +202,9 @@ export function ScenarioPathsChart({
         })}
       </div>
 
+      <div role="img" aria-label="Scenario projection paths for the portfolio with plus or minus one and two sigma uncertainty bands.">
       <ResponsiveContainer width="100%" height={height}>
-        <ComposedChart data={dataWithBands} margin={{ top: 5, right: 15, left: 24, bottom: 5 }}>
+        <ComposedChart accessibilityLayer data={dataWithBands} margin={{ top: 5, right: 15, left: 24, bottom: 5 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
           <XAxis
             dataKey="date"
@@ -289,6 +290,7 @@ export function ScenarioPathsChart({
           })}
         </ComposedChart>
       </ResponsiveContainer>
+      </div>
     </div>
   );
 }

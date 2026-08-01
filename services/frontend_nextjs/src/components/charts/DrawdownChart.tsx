@@ -119,8 +119,9 @@ export function DrawdownChart({
   }
 
   return (
+    <div role="img" aria-label="Portfolio drawdown over time.">
     <ResponsiveContainer width="100%" height={height}>
-      <ComposedChart data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
+      <ComposedChart accessibilityLayer data={data} margin={{ top: 5, right: 10, left: 24, bottom: 5 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" />
         <XAxis
           dataKey="date"
@@ -206,5 +207,6 @@ export function DrawdownChart({
         )}
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 }

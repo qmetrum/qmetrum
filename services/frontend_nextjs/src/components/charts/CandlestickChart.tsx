@@ -138,6 +138,8 @@ export function CandlestickChart({
   if (bars.length === 0) {
     return (
       <div
+        role="img"
+        aria-label="Candlestick price chart with historical and forecast bars."
         className="flex items-center justify-center text-sm text-[var(--text-muted)]"
         style={{ height }}
       >
@@ -146,5 +148,12 @@ export function CandlestickChart({
     );
   }
 
-  return <div ref={containerRef} style={{ height, width: "100%" }} />;
+  return (
+    <div
+      ref={containerRef}
+      role="img"
+      aria-label="Candlestick price chart with historical and forecast bars."
+      style={{ height, width: "100%" }}
+    />
+  );
 }

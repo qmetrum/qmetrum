@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import { RouteAnnouncer } from "@/components/layout/RouteAnnouncer";
 
 // Owns the app chrome state so the content offset reflows with the sidebar
 // (fixes the collapse dead-gap) and a mobile off-canvas drawer works below lg.
@@ -28,6 +29,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <TopBar onOpenMobileNav={() => setMobileOpen(true)} />
         <main className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">{children}</main>
       </div>
+      <RouteAnnouncer />
     </div>
   );
 }

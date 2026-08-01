@@ -138,8 +138,9 @@ function SingleChart({ data }: { data: VarBacktestResponse }) {
   }
   const tickEvery = Math.max(1, Math.floor(rows.length / 6));
   return (
+    <div role="img" aria-label="Value-at-risk backtest chart: realized returns against the predicted VaR threshold with breach markers.">
     <ResponsiveContainer width="100%" height={240}>
-      <ComposedChart data={rows} margin={{ top: 8, right: 10, left: 6, bottom: 4 }}>
+      <ComposedChart accessibilityLayer data={rows} margin={{ top: 8, right: 10, left: 6, bottom: 4 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#8B95A2" }} interval={tickEvery}
           tickFormatter={(v: string) => (v.length >= 7 ? v.slice(0, 7) : v)} />
@@ -156,6 +157,7 @@ function SingleChart({ data }: { data: VarBacktestResponse }) {
         <Scatter dataKey="breachVal" name="Breach" fill="#D85A30" isAnimationActive={false} />
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
@@ -213,8 +215,9 @@ function CompareChart({ data }: { data: VarBacktestCompareResponse }) {
   if (rows.length === 0) return null;
   const tickEvery = Math.max(1, Math.floor(rows.length / 6));
   return (
+    <div role="img" aria-label="Value-at-risk backtest chart: realized returns against the predicted VaR threshold with breach markers.">
     <ResponsiveContainer width="100%" height={240}>
-      <ComposedChart data={rows} margin={{ top: 8, right: 10, left: 6, bottom: 4 }}>
+      <ComposedChart accessibilityLayer data={rows} margin={{ top: 8, right: 10, left: 6, bottom: 4 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="#EEF0F3" vertical={false} />
         <XAxis dataKey="label" tick={{ fontSize: 9, fill: "#8B95A2" }} interval={tickEvery}
           tickFormatter={(v: string) => (v.length >= 7 ? v.slice(0, 7) : v)} />
@@ -232,6 +235,7 @@ function CompareChart({ data }: { data: VarBacktestCompareResponse }) {
         ))}
       </ComposedChart>
     </ResponsiveContainer>
+    </div>
   );
 }
 
