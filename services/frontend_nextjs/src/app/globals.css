@@ -1,5 +1,36 @@
 @import "tailwindcss";
 
+@theme {
+  --font-sans: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  --radius-card: 10px;
+}
+
+/* Register the semantic CSS-variable tokens as theme-aware Tailwind colors
+   (`inline` => the utility resolves the live --var, so bg-navy / text-card-bg /
+   border-card-border switch with light/dark). Existing text-[var(--x)] usages
+   keep working; this just makes the tokens first-class and autocompletable. */
+@theme inline {
+  --color-navy: var(--navy);
+  --color-slate: var(--slate);
+  --color-teal: var(--teal);
+  --color-teal-muted: var(--teal-muted);
+  --color-coral: var(--coral);
+  --color-amber: var(--amber);
+  --color-blue: var(--blue);
+  --color-content-bg: var(--content-bg);
+  --color-card-bg: var(--card-bg);
+  --color-card-border: var(--card-border);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-border: var(--border);
+  --color-positive: var(--positive);
+  --color-negative: var(--negative);
+  --color-caution: var(--caution);
+  --color-info: var(--info);
+}
+
 :root {
   /* ── Brand palette ── */
   --navy: #0B1D3A;
