@@ -16,6 +16,7 @@ import {
 import { portfolioListApi } from "@/lib/api";
 import { useSavedAssets } from "@/lib/savedAssets";
 import { useModalA11y } from "@/components/shared/useModalA11y";
+import { useToast } from "@/components/shared/Toast";
 import { formatApiDate } from "@/lib/datetime";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { RegimeBadge } from "@/components/shared/RegimeBadge";
@@ -66,6 +67,7 @@ export default function AssetDetailPage() {
   const { symbol } = useParams<{ symbol: string }>();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const ticker = (symbol ?? "").toUpperCase();
 
   const [tab, setTab] = useState<Tab>("Overview");
@@ -197,6 +199,7 @@ export default function AssetDetailPage() {
       }
       queryClient.invalidateQueries({ queryKey: ["portfolios-list"] });
       setShowAddModal(false);
+      toast("Added to portfolio", "success");
     } catch (err) {
       setAddError(
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail

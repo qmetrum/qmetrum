@@ -6,6 +6,7 @@ import { AuthProvider } from "react-oidc-context";
 import { BrandingProvider } from "@/components/providers/BrandingProvider";
 import { AuthSync } from "@/components/auth/AuthSync";
 import { AuthGate } from "@/components/auth/AuthGate";
+import { ToastProvider } from "@/components/shared/Toast";
 import { oidcConfig } from "@/lib/auth";
 
 function makeQueryClient() {
@@ -28,7 +29,9 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <AuthSync />
         <BrandingProvider>
-          <AuthGate>{children}</AuthGate>
+          <ToastProvider>
+            <AuthGate>{children}</AuthGate>
+          </ToastProvider>
         </BrandingProvider>
       </QueryClientProvider>
     </AuthProvider>

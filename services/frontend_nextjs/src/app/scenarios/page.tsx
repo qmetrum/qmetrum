@@ -25,6 +25,7 @@ import { ScenarioExplainerCard, buildScenarioItems } from "@/components/shared/S
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
 import { formatApiDate } from "@/lib/datetime";
+import { useToast } from "@/components/shared/Toast";
 import {
   ResponsiveContainer,
   BarChart,
@@ -357,6 +358,7 @@ export default function ScenariosPage() {
 
   // ── Saved scenario sessions (server-side; survive logout/login) ──
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [showSessions, setShowSessions] = useState(false);
   const [savedMsg, setSavedMsg] = useState<{ text: string; ok: boolean } | null>(null);
   const { data: sessions } = useQuery({
@@ -376,6 +378,7 @@ export default function ScenariosPage() {
       qc.invalidateQueries({ queryKey: ["scenario-sessions"] });
       setSavedMsg({ text: `Saved “${s.name}”.`, ok: true });
       setTimeout(() => setSavedMsg(null), 4000);
+      toast("Session saved", "success");
     },
     onError: (e) => {
       // Never fail silently: surface why the save did not work.
@@ -392,7 +395,10 @@ export default function ScenariosPage() {
   });
   const deleteSession = useMutation({
     mutationFn: (id: number) => scenarioSessionApi.remove(id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["scenario-sessions"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["scenario-sessions"] });
+      toast("Session deleted", "success");
+    },
   });
 
   async function loadSession(id: number) {

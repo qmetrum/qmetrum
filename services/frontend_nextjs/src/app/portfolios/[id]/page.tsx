@@ -18,6 +18,7 @@ import { VarBacktestCard } from "@/components/shared/VarBacktestCard";
 import { DrawdownAllocationCard } from "@/components/shared/DrawdownAllocationCard";
 import { ClientQADrawer } from "@/components/shared/ClientQADrawer";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
+import { useToast } from "@/components/shared/Toast";
 import type { CsvCell } from "@/lib/csv";
 import { ForecastChart } from "@/components/charts/ForecastChart";
 import { CandlestickChart } from "@/components/charts/CandlestickChart";
@@ -32,6 +33,7 @@ export default function PortfolioDetailPage() {
   const id = params.id as string;
   const [horizon] = useState(90);
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [showQADrawer, setShowQADrawer] = useState(false);
@@ -115,6 +117,7 @@ export default function PortfolioDetailPage() {
       cancelEditing();
       queryClient.invalidateQueries({ queryKey: ["portfolio", id] });
       queryClient.invalidateQueries({ queryKey: ["portfolio-forecast", id] });
+      toast("Holdings saved", "success");
     } catch (err) {
       setSaveError(
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -924,6 +927,7 @@ export default function PortfolioDetailPage() {
           await portfolioApi.update(id, { name: portfolio!.name, assets: merged });
           queryClient.invalidateQueries({ queryKey: ["portfolio", id] });
           queryClient.invalidateQueries({ queryKey: ["portfolio-forecast", id] });
+          toast("Weights applied to portfolio", "success");
         }}
       />
 

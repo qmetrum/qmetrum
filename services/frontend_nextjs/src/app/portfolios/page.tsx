@@ -5,10 +5,12 @@ import Link from "next/link";
 import { useState } from "react";
 import { portfolioListApi, portfolioApi, type PortfolioResponse } from "@/lib/api";
 import { formatApiDate } from "@/lib/datetime";
+import { useToast } from "@/components/shared/Toast";
 
 export default function PortfoliosPage() {
   const qc = useQueryClient();
   const [confirmId, setConfirmId] = useState<number | null>(null);
+  const { toast } = useToast();
 
   const { data: portfolios, isLoading } = useQuery({
     queryKey: ["portfolios-list"],
@@ -20,6 +22,7 @@ export default function PortfoliosPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["portfolios-list"] });
       setConfirmId(null);
+      toast("Portfolio deleted", "success");
     },
   });
 
