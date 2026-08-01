@@ -2,7 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   assetApi,
   portfolioApi,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/api";
 import { portfolioListApi } from "@/lib/api";
 import { useSavedAssets } from "@/lib/savedAssets";
+import { useModalA11y } from "@/components/shared/useModalA11y";
 import { formatApiDate } from "@/lib/datetime";
 import { MetricCard } from "@/components/shared/MetricCard";
 import { RegimeBadge } from "@/components/shared/RegimeBadge";
@@ -77,6 +78,8 @@ export default function AssetDetailPage() {
   const [newPortfolioName, setNewPortfolioName] = useState("");
   const [addSaving, setAddSaving] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  const addModalRef = useRef<HTMLDivElement>(null);
+  useModalA11y(showAddModal, () => setShowAddModal(false), addModalRef);
 
   // ── Data fetching ──
   const { data: profile, isLoading: profileLoading } = useQuery<AssetProfileResponse>({
@@ -798,7 +801,7 @@ export default function AssetDetailPage() {
       {/* ── Add to Portfolio Modal ── */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="q-card w-full max-w-md p-6 space-y-4">
+          <div ref={addModalRef} role="dialog" aria-modal="true" tabIndex={-1} className="q-card w-full max-w-md p-6 space-y-4">
             <h2 className="text-lg font-semibold text-[var(--text-primary)]">
               Add {ticker} to Portfolio
             </h2>

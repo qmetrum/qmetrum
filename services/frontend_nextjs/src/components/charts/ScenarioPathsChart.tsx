@@ -282,7 +282,7 @@ export function ScenarioPathsChart({
                 strokeOpacity={isFaded ? 0.3 : 1}
                 dot={false}
                 isAnimationActive={false}
-                name={name}
+                name={DISPLAY_NAMES[name] ?? name}
                 connectNulls={false}
               />
             );

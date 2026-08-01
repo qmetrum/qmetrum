@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { onActivate } from "@/lib/a11y";
 import {
   ResponsiveContainer,
   ScatterChart,
@@ -210,7 +211,11 @@ export function DrawdownAllocationCard({ portfolioId, onApply }: Props) {
                   return (
                     <tr
                       key={m.key}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSel}
                       onClick={() => { setSelected(m.key); setApply({ status: "idle" }); }}
+                      onKeyDown={onActivate(() => { setSelected(m.key); setApply({ status: "idle" }); })}
                       className={`cursor-pointer border-t border-[var(--card-border)] transition-colors ${
                         isSel ? "bg-[var(--teal-light)]" : "hover:bg-[var(--content-bg)]"
                       }`}

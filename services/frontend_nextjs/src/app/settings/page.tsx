@@ -1,17 +1,11 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useRef } from "react";
 import { useBranding } from "@/components/providers/BrandingProvider";
 
 export default function SettingsPage() {
   const branding = useBranding();
-  const [saved, setSaved] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
-
-  function handleSave() {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
-  }
 
   function handleLogoUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -202,12 +196,9 @@ export default function SettingsPage() {
         </div>
       </div>
 
-      <button
-        onClick={handleSave}
-        className="rounded-lg bg-[var(--teal)] px-6 py-2.5 text-sm font-semibold text-white hover:opacity-90 transition-opacity"
-      >
-        {saved ? "Saved!" : "Save Settings"}
-      </button>
+      <p className="text-xs text-[var(--text-muted)]">
+        Changes are saved automatically as you edit.
+      </p>
     </div>
   );
 }

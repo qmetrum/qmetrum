@@ -40,6 +40,11 @@
   --caution: #D4920B;
   --info: #2B7ACC;
 
+  /* muted card surface + red severity (used by anomaly badge / skeletons) */
+  --card-muted: #EEF1F5;
+  --red: #DC2626;
+  --red-light: #FDECEC;
+
   /* ── Regime colors ── */
   --regime-normal: #0F8B6E;
   --regime-high-fragility: #D85A30;
@@ -81,6 +86,9 @@ html.dark {
   --negative: #EF5350;
   --caution: #F59E0B;
   --info: #3B82F6;
+  --card-muted: #101826;
+  --red: #EF5350;
+  --red-light: rgba(239, 83, 80, 0.15);
 }
 
 html.dark body {

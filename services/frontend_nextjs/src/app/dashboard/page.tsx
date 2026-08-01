@@ -41,17 +41,19 @@ export default function DashboardPage() {
         <div className="flex items-center gap-2">
           <span
             className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium ${
-              health?.status === "ok" || health?.status
+              health?.status === "ok"
                 ? "bg-[var(--teal-light)] text-[var(--teal-muted)]"
-                : "bg-[var(--coral-light)] text-[var(--coral)]"
+                : health
+                  ? "bg-[var(--amber-light)] text-[var(--amber)]"
+                  : "bg-[var(--coral-light)] text-[var(--coral)]"
             }`}
           >
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                health ? "bg-[var(--teal)]" : "bg-[var(--coral)]"
+                health?.status === "ok" ? "bg-[var(--teal)]" : health ? "bg-[var(--amber)]" : "bg-[var(--coral)]"
               }`}
             />
-            Engine {health ? "Online" : "Connecting..."}
+            Engine {health?.status === "ok" ? "Online" : health ? "Degraded" : "Connecting..."}
           </span>
         </div>
       </div>

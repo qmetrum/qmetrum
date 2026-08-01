@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { alertApi } from "@/lib/api";
+import { useModalA11y } from "@/components/shared/useModalA11y";
 
 type Props = {
   open: boolean;
@@ -20,6 +21,8 @@ export function CreateAlertDialog({
   currentPrice,
 }: Props) {
   const queryClient = useQueryClient();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useModalA11y(open, onClose, dialogRef);
 
   const initialTicker = (defaultTicker ?? tickers[0] ?? "").toUpperCase();
   const [ticker, setTicker] = useState(initialTicker);
@@ -109,7 +112,13 @@ export function CreateAlertDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-      <div className="q-card w-full max-w-md p-6 space-y-4">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
+        className="q-card w-full max-w-md p-6 space-y-4"
+      >
         <h2 className="text-lg font-semibold text-[var(--text-primary)]">
           Create Alert
         </h2>

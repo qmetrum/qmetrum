@@ -5,6 +5,7 @@ import { agentsApi } from "@/lib/api";
 import { SourceDataPanel } from "@/components/shared/SourceDataPanel";
 import { Markdown } from "@/components/shared/Markdown";
 import { AGENT_DISCLAIMER, stripDisclaimer } from "@/components/shared/AgentCard";
+import { useModalA11y } from "@/components/shared/useModalA11y";
 
 type Metrics = Record<string, number | null | undefined>;
 
@@ -47,6 +48,9 @@ export function ClientQADrawer({
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useModalA11y(open, onClose, panelRef);
 
   useEffect(() => {
     if (open) {
@@ -92,6 +96,10 @@ export function ClientQADrawer({
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
       <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
         className="w-full max-w-lg bg-[var(--card-bg)] h-full flex flex-col shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
