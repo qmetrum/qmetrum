@@ -126,6 +126,12 @@ export default function PortfolioDetailPage() {
     }
   };
 
+  const normalizeWeights = () => {
+    const sum = editAssets.reduce((s, a) => s + (a.weight ?? 0), 0);
+    if (sum <= 0) return;
+    setEditAssets((prev) => prev.map((a) => ({ ...a, weight: (a.weight ?? 0) / sum })));
+  };
+
   const { data: portfolio, isLoading: pLoading, isError: pError } = useQuery({
     queryKey: ["portfolio", id],
     queryFn: () => portfolioApi.get(id),
@@ -178,6 +184,8 @@ export default function PortfolioDetailPage() {
   };
 
   const loading = pLoading || fLoading;
+  const weightSum = editAssets.reduce((s, a) => s + (a.weight ?? 0), 0);
+  const weightsOff = editAssets.length > 0 && Math.abs(weightSum - 1) >= 0.005;
 
   return (
     <div className="space-y-6">
@@ -618,6 +626,17 @@ export default function PortfolioDetailPage() {
               </button>
             ) : (
               <div className="flex items-center gap-2">
+                <span
+                  className={`text-xs font-medium ${weightsOff ? "text-[var(--amber)]" : "text-[var(--text-muted)]"}`}
+                  title="Sum of holding weights"
+                >
+                  Σ {(weightSum * 100).toFixed(1)}%
+                </span>
+                {weightsOff && weightSum > 0 && (
+                  <button onClick={normalizeWeights} className="text-xs font-medium text-[var(--teal)] hover:underline">
+                    Normalize
+                  </button>
+                )}
                 <button
                   onClick={cancelEditing}
                   className="text-xs font-medium text-[var(--text-muted)] hover:underline"

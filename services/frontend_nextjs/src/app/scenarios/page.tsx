@@ -568,12 +568,18 @@ export default function ScenariosPage() {
                         </span>
                       </button>
                       <button
-                        onClick={() => deleteSession.mutate(s.id)}
+                        onClick={() => {
+                          if (window.confirm(`Delete saved session "${s.name}"?`)) deleteSession.mutate(s.id);
+                        }}
                         className="shrink-0 text-[var(--text-muted)] hover:text-[var(--coral)]"
-                        title="Delete"
+                        title="Delete session"
+                        aria-label={`Delete session ${s.name}`}
                       >
                         ✕
                       </button>
+                      {deleteSession.isError && (
+                        <span role="alert" className="shrink-0 text-[10px] font-medium text-[var(--coral)]">failed</span>
+                      )}
                     </li>
                   ))}
                 </ul>
