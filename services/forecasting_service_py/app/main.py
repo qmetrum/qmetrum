@@ -137,6 +137,9 @@ ML_RUNTIME_STRICT = _env_flag("ML_RUNTIME_STRICT", False)
 ALERT_SCHEDULER_ENABLED = _env_flag("ALERT_SCHEDULER_ENABLED", True)
 ALERT_SCHEDULER_INTERVAL_SECONDS = int(os.getenv("ALERT_SCHEDULER_INTERVAL_SECONDS", "300"))
 ALERT_EVENT_COOLDOWN_SECONDS = int(os.getenv("ALERT_EVENT_COOLDOWN_SECONDS", "900"))
+# Skip SCHEDULED (automatic) alert firing when the US market is closed, so stale
+# weekend / after-hours data never generates alerts. Manual evaluation is unaffected.
+ALERT_RESPECT_MARKET_HOURS = _env_flag("ALERT_RESPECT_MARKET_HOURS", True)
 # Shared secret for the Qpulse anomaly-detector webhook. Unset => /qpulse/ingest
 # refuses every request, so the endpoint ships inert until it is provisioned.
 QPULSE_INGEST_KEY = os.getenv("QPULSE_INGEST_KEY", "")
@@ -1901,6 +1904,22 @@ def _is_triggered(value: float, direction: str, threshold: float) -> bool:
     return value >= threshold
 
 
+def _market_is_open(now_utc: Optional[datetime] = None) -> bool:
+    """US equity regular session: Mon-Fri, 09:30-16:00 America/New_York. Coarse —
+    ignores market holidays / half-days (a stale-data guard, not a full trading
+    calendar). Gates SCHEDULED alert firing so weekend/off-hours data is skipped."""
+    from datetime import timezone
+    from zoneinfo import ZoneInfo
+    now = now_utc or utcnow()
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    et = now.astimezone(ZoneInfo("America/New_York"))
+    if et.weekday() >= 5:  # Saturday / Sunday
+        return False
+    minutes = et.hour * 60 + et.minute
+    return 9 * 60 + 30 <= minutes <= 16 * 60
+
+
 def _evaluate_alert_rule(rule: AlertRule) -> dict:
     ticker = rule.ticker
     direction = str(rule.direction or "above").lower()
@@ -2051,52 +2070,54 @@ def _evaluate_alerts_internal(
             now = utcnow()
             triggered = bool(result.get("triggered", False))
             cooldown_seconds = int((alert.extra_config or {}).get("cooldown_seconds", ALERT_EVENT_COOLDOWN_SECONDS))
-            suppressed_by_cooldown = False
-            last_triggered_at = None
 
-            if persist and triggered and cooldown_seconds > 0:
-                last_triggered = session.exec(
-                    select(AlertEvent)
-                    .where(AlertEvent.alert_id == alert.id)
-                    .where(AlertEvent.triggered == True)  # noqa: E712
-                    .order_by(AlertEvent.evaluated_at.desc())
-                ).first()
-                if last_triggered and last_triggered.evaluated_at:
-                    last_triggered_at = last_triggered.evaluated_at
-                    suppress_before = now - timedelta(seconds=cooldown_seconds)
-                    if last_triggered.evaluated_at >= suppress_before:
-                        suppressed_by_cooldown = True
-
-            # Externally-evaluated rules produce no rows at all — persisting a
-            # "not triggered" event for them would both add noise and make the
-            # rule's latest event a placeholder rather than the real alert.
+            # Externally-evaluated rules produce no rows at all — a placeholder
+            # would add noise and hide the real alert.
             skipped_external = bool(result.get("skipped"))
 
+            # Edge-triggered dedup: fire ONCE when the condition becomes true and
+            # not again until it clears and re-crosses. (Level-triggered firing on
+            # every scheduler cycle — every 15 min while the price stayed over the
+            # threshold — was the "alerts all the time" bug.)
+            last_event = None
+            if persist and not skipped_external:
+                last_event = session.exec(
+                    select(AlertEvent)
+                    .where(AlertEvent.alert_id == alert.id)
+                    .order_by(AlertEvent.evaluated_at.desc())
+                ).first()
+            last_was_triggered = bool(last_event and last_event.triggered)
+            already_active = triggered and last_was_triggered
+            rising_edge = triggered and not last_was_triggered           # fresh cross
+            falling_edge = (not triggered) and last_was_triggered         # cleared
+            persist_event = bool(persist and not skipped_external and (rising_edge or falling_edge))
+
+            result["already_active"] = already_active
             result["cooldown_seconds"] = cooldown_seconds
-            result["suppressed_by_cooldown"] = suppressed_by_cooldown
-            result["last_triggered_at"] = last_triggered_at.isoformat() if last_triggered_at else None
-            result["event_persisted"] = (
-                (not suppressed_by_cooldown) if (persist and not skipped_external) else False
+            result["suppressed_by_cooldown"] = already_active  # kept for API back-compat
+            result["last_triggered_at"] = (
+                last_event.evaluated_at.isoformat()
+                if (last_event and last_event.triggered and last_event.evaluated_at) else None
             )
+            result["event_persisted"] = persist_event
             evaluations.append(result)
 
-            if persist and not skipped_external:
-                if not suppressed_by_cooldown:
-                    session.add(
-                        AlertEvent(
-                            alert_id=alert.id,
-                            ticker=alert.ticker,
-                            alert_type=alert.alert_type,
-                            triggered=triggered,
-                            payload=result,
-                            evaluated_at=now,
-                        )
+            if persist_event:
+                session.add(
+                    AlertEvent(
+                        alert_id=alert.id,
+                        ticker=alert.ticker,
+                        alert_type=alert.alert_type,
+                        triggered=triggered,
+                        payload=result,
+                        evaluated_at=now,
                     )
-                    # Notify the rule owner on a FRESH trigger only (cooldown
-                    # already gates this, so we never spam). Best-effort: email
-                    # failure must not affect evaluation/persistence.
-                    if triggered:
-                        pending_emails.append((alert.user_id, alert.name or f"Alert #{alert.id}", result))
+                )
+                # Notify the rule owner only on the RISING edge (a fresh trigger),
+                # never on the clear or an ongoing condition. Best-effort: email
+                # failure must not affect evaluation/persistence.
+                if rising_edge:
+                    pending_emails.append((alert.user_id, alert.name or f"Alert #{alert.id}", result))
 
         if persist:
             session.commit()
@@ -2138,15 +2159,18 @@ def _alert_scheduler_loop() -> None:
     )
     while not _alert_scheduler_stop.is_set():
         started = utcnow()
-        try:
-            summary = _evaluate_alerts_internal(active_only=True, persist=True)
-            logger.info(
-                "Scheduled alert evaluation completed: evaluated=%s triggered=%s",
-                summary["evaluated_count"],
-                summary["triggered_count"],
-            )
-        except Exception as e:
-            logger.error("Scheduled alert evaluation failed: %s", str(e))
+        if ALERT_RESPECT_MARKET_HOURS and not _market_is_open(started):
+            logger.info("US market closed — skipping scheduled alert evaluation.")
+        else:
+            try:
+                summary = _evaluate_alerts_internal(active_only=True, persist=True)
+                logger.info(
+                    "Scheduled alert evaluation completed: evaluated=%s triggered=%s",
+                    summary["evaluated_count"],
+                    summary["triggered_count"],
+                )
+            except Exception as e:
+                logger.error("Scheduled alert evaluation failed: %s", str(e))
 
         elapsed = (utcnow() - started).total_seconds()
         sleep_for = max(1, ALERT_SCHEDULER_INTERVAL_SECONDS - int(elapsed))
