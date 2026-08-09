@@ -471,3 +471,45 @@ class AgentRun(SQLModel, table=True):
     error: Optional[str] = Field(default=None)
     extra: dict = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+
+
+class CorrelationSnapshot(SQLModel, table=True):
+    """One realized rolling cross-asset correlation, per pair per window.
+
+    Powers the free, no-login Cross-Asset Correlation Monitor. Recomputed by
+    scripts/correlation_batch.py from cached EOD closes and served precomputed by
+    /public/correlations, so every number regenerates from a clean clone and the
+    request path never touches the vendor. `as_of` is a calendar day, so it stays
+    naive like MarketData.date; the instant columns use UtcDateTime.
+    """
+    __table_args__ = (
+        UniqueConstraint("pair_key", "window_days",
+                         name="uq_correlationsnapshot_pair_window"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    pair_key: str = Field(index=True)              # e.g. "SPY_AGG"
+    symbol_a: str = Field(default="")
+    symbol_b: str = Field(default="")
+    label: str = Field(default="")
+    window_days: int = Field(index=True)           # 30 | 60 | 90 trailing trading days
+    as_of: datetime = Field(index=True)            # last trading day in the aligned series (naive)
+    corr_pearson: float = Field(default=0.0)
+    corr_spearman: float = Field(default=0.0)
+    n_obs: int = Field(default=0)
+    method: str = Field(default="")
+    data_source: str = Field(default="")           # honest vendor label at compute time
+    series_json: str = Field(default="[]")         # JSON [{date, corr}] trailing rolling-Pearson
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+
+
+class EmailSignup(SQLModel, table=True):
+    """Lead capture for the public correlation monitor. Capture-only — no email
+    is sent (SES delivery is gated/off). Export later when the weekly note ships.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    email: str = Field(index=True, unique=True)
+    source: str = Field(default="correlation_monitor", index=True)
+    confirmed: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)

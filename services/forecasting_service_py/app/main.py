@@ -11,6 +11,7 @@ import os
 import json
 import hashlib
 import math
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta
@@ -73,6 +74,8 @@ from app.db.models import (
     UserStoragePreference,
     MarketData,
     PortfolioReportDataCache,
+    CorrelationSnapshot,
+    EmailSignup,
 )
 from app.vendors import get_vendor
 
@@ -506,6 +509,118 @@ def readiness_check():
     if payload["status"] != "healthy":
         raise HTTPException(status_code=503, detail=payload)
     return payload
+
+
+# -------------------------------------------------------------------
+# Public (no-login) Cross-Asset Correlation Monitor
+# -------------------------------------------------------------------
+# These two endpoints are deliberately UNAUTHENTICATED — they take no X-User-Id
+# and never call _require_user (same pattern as /healthz). They serve the free
+# marketing page at /correlations. All numbers are precomputed by
+# scripts/correlation_batch.py, so the request path does no vendor calls or math.
+
+_CORR_DISCLAIMERS = [
+    "Correlations use simple close-to-close daily returns of liquid ETF proxies "
+    "(SPY, AGG, TLT, IEF, GLD, HYG, QQQ) — not dividend-adjusted total returns.",
+    "Windows are trailing trading days (not calendar days). n = observations used.",
+    "This is a measurement of what markets have actually realized — not a forecast.",
+    "Every number regenerates from public end-of-day prices via "
+    "scripts/correlation_batch.py.",
+]
+
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class CorrelationSignupRequest(BaseModel):
+    email: str
+
+
+@app.get("/public/correlations")
+def public_correlations():
+    """PUBLIC: realized rolling cross-asset correlations for the free monitor.
+
+    Serves precomputed CorrelationSnapshot rows only. Returns an empty payload
+    (not an error) before the first batch run has seeded the table.
+    """
+    from app.logic.correlation_monitor import PAIRS, WINDOWS, RETURN_METHOD, pair_key
+
+    with Session(engine) as session:
+        rows = session.exec(select(CorrelationSnapshot)).all()
+
+    if not rows:
+        return {
+            "as_of": None,
+            "windows": WINDOWS,
+            "method": RETURN_METHOD,
+            "data_source": None,
+            "pairs": [],
+            "disclaimers": _CORR_DISCLAIMERS,
+            "note": "Not yet computed. Run scripts/correlation_batch.py to seed.",
+        }
+
+    by_pair: Dict[str, Dict[str, Any]] = {}
+    as_of_dates = []
+    data_sources = set()
+    for r in rows:
+        p = by_pair.setdefault(r.pair_key, {
+            "pair_key": r.pair_key,
+            "symbol_a": r.symbol_a,
+            "symbol_b": r.symbol_b,
+            "label": r.label,
+            "windows": {},
+            "series": {},
+        })
+        p["windows"][str(r.window_days)] = {
+            "pearson": r.corr_pearson,
+            "spearman": r.corr_spearman,
+            "n_obs": r.n_obs,
+        }
+        try:
+            p["series"][str(r.window_days)] = json.loads(r.series_json or "[]")
+        except Exception:
+            p["series"][str(r.window_days)] = []
+        if r.as_of:
+            as_of_dates.append(r.as_of)
+        if r.data_source:
+            data_sources.add(r.data_source)
+
+    # Preserve the canonical PAIRS order regardless of DB row order.
+    ordered = [by_pair[pair_key(a, b)] for a, b, _label in PAIRS if pair_key(a, b) in by_pair]
+    as_of = max(as_of_dates).strftime("%Y-%m-%d") if as_of_dates else None
+
+    return {
+        "as_of": as_of,
+        "windows": WINDOWS,
+        "method": RETURN_METHOD,
+        "data_source": " + ".join(sorted(data_sources)) if data_sources else None,
+        "pairs": ordered,
+        "disclaimers": _CORR_DISCLAIMERS,
+    }
+
+
+@app.post("/public/correlation-signup")
+def public_correlation_signup(body: CorrelationSignupRequest):
+    """PUBLIC: capture an email for the weekly correlation note.
+
+    Capture-only — no email is sent (SES delivery is off). Always returns 200 on
+    a valid address (even for duplicates) to avoid address enumeration.
+    """
+    email = (body.email or "").strip().lower()
+    if not email or len(email) > 254 or not _EMAIL_RE.match(email):
+        raise HTTPException(status_code=422, detail="Please enter a valid email address.")
+    try:
+        with Session(engine) as session:
+            existing = session.exec(
+                select(EmailSignup).where(EmailSignup.email == email)
+            ).first()
+            if not existing:
+                session.add(EmailSignup(email=email, source="correlation_monitor"))
+                session.commit()
+    except Exception:
+        # Unique-race or any storage hiccup: still confirm to the visitor.
+        pass
+    return {"status": "ok"}
+
 
 # -------------------------------------------------------------------
 # Canonical Asset Helpers
