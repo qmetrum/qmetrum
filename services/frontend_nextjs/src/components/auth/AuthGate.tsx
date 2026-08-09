@@ -13,7 +13,7 @@ import { useAuth } from "react-oidc-context";
  *   mid-token-exchange there and handles its own redirect.
  * - On error, shows a small retry screen instead of looping.
  */
-const PUBLIC_PATHS = new Set(["/auth/callback"]);
+const PUBLIC_PATHS = new Set(["/auth/callback", "/correlations"]);
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const auth = useAuth();

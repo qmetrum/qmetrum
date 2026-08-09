@@ -1120,3 +1120,54 @@ export const portfolioListApi = {
     return res.data.items ?? [];
   },
 };
+
+// ── Public (no-login) Cross-Asset Correlation Monitor ──────────────────────────
+// These call the unauthenticated /public/* endpoints with plain fetch (no
+// X-User-Id / bearer), so the free /correlations page works logged-out.
+export type CorrelationWindowStat = { pearson: number; spearman: number; n_obs: number };
+export type CorrelationSeriesPoint = { date: string; corr: number };
+export type CorrelationPair = {
+  pair_key: string;
+  symbol_a: string;
+  symbol_b: string;
+  label: string;
+  windows: Record<string, CorrelationWindowStat>;
+  series: Record<string, CorrelationSeriesPoint[]>;
+};
+export type CorrelationMonitorResponse = {
+  as_of: string | null;
+  windows: number[];
+  method: string;
+  data_source: string | null;
+  pairs: CorrelationPair[];
+  disclaimers: string[];
+  note?: string;
+};
+
+export const correlationApi = {
+  get: async (): Promise<CorrelationMonitorResponse> => {
+    const r = await fetch(`${API_BASE_URL}/public/correlations`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!r.ok) throw new Error(`Failed to load correlations (${r.status})`);
+    return r.json();
+  },
+  signup: async (email: string): Promise<{ status: string }> => {
+    const r = await fetch(`${API_BASE_URL}/public/correlation-signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+    if (!r.ok) {
+      let detail = "Something went wrong. Please try again.";
+      try {
+        const j = await r.json();
+        if (typeof j?.detail === "string") detail = j.detail;
+      } catch {
+        /* non-JSON error body */
+      }
+      throw new Error(detail);
+    }
+    return r.json();
+  },
+};

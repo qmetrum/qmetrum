@@ -1,15 +1,25 @@
 "use client";
 
 import { useState } from "react";
+import { usePathname } from "next/navigation";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
 import { RouteAnnouncer } from "@/components/layout/RouteAnnouncer";
 
+// Public, no-login pages (e.g. the Cross-Asset Correlation Monitor) render bare,
+// without the advisor workstation chrome.
+const BARE_PREFIXES = ["/correlations"];
+
 // Owns the app chrome state so the content offset reflows with the sidebar
 // (fixes the collapse dead-gap) and a mobile off-canvas drawer works below lg.
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname() ?? "/";
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  if (BARE_PREFIXES.some((p) => pathname.startsWith(p))) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex min-h-screen">
