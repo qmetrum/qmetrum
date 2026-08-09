@@ -513,3 +513,39 @@ class EmailSignup(SQLModel, table=True):
     source: str = Field(default="correlation_monitor", index=True)
     confirmed: bool = Field(default=False)
     created_at: datetime = Field(default_factory=utcnow, index=True, sa_type=UtcDateTime)
+
+
+class PortfolioRegimeSnapshot(SQLModel, table=True):
+    """Per-portfolio Regime Watch measurement — the Qpulse regime signal surfaced
+    inside Qsight on an advisor's real holdings (realized equity-vs-bond
+    correlation now vs the book's own long-run baseline).
+
+    Deliberately a SEPARATE table from the public CorrelationSnapshot: this is
+    private per-advisor data and must never leak through the public
+    /public/correlations reader. Precomputed by scripts/correlation_batch.py;
+    served by GET /portfolios/{id}/regime_watch. `as_of` is a calendar day so it
+    stays naive; instant columns use UtcDateTime.
+    """
+    __table_args__ = (
+        UniqueConstraint("portfolio_id", "short_window", "baseline_window",
+                         name="uq_portfolioregimesnapshot_key"),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    portfolio_id: int = Field(foreign_key="portfolio.id", index=True)
+    pair: str = Field(default="equity_vs_bond")
+    status: str = Field(default="ok")              # ok | na
+    short_window: int = Field(default=60)
+    baseline_window: int = Field(default=252)
+    short_corr: float = Field(default=0.0)
+    baseline_corr: float = Field(default=0.0)      # the book's OWN long-run realized corr
+    delta: float = Field(default=0.0)
+    n_obs: int = Field(default=0)
+    as_of: Optional[datetime] = Field(default=None, index=True)  # last trading day (naive); null when N/A
+    method: str = Field(default="")
+    data_source: str = Field(default="")
+    sleeve_weights_json: str = Field(default="{}")
+    series_json: str = Field(default="[]")
+    reason: str = Field(default="")                # why N/A, when status != ok
+    created_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)
+    updated_at: datetime = Field(default_factory=utcnow, sa_type=UtcDateTime)

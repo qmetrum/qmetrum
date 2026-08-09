@@ -38,6 +38,82 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
+def _refresh_portfolio_regime(session, data_source: str) -> int:
+    """Per-portfolio Regime Watch: realized equity-vs-bond correlation on real
+    holdings vs the book's own baseline. Reads CACHED prices only (no force
+    refresh) to stay cheap — holdings are kept fresh by the nightly universe
+    refresh. Upserts one PortfolioRegimeSnapshot per portfolio (ok or honest N/A).
+    """
+    from app.db.models import Asset, PortfolioRegimeSnapshot, Portfolio, Position
+
+    now = utcnow()
+    written = 0
+    portfolios = session.exec(select(Portfolio)).all()
+    for pf in portfolios:
+        positions = session.exec(
+            select(Position).where(Position.portfolio_id == pf.id)
+        ).all()
+        if not positions:
+            continue
+        total_w = sum(float(p.weight or 0.0) for p in positions) or 1.0
+        holdings = []
+        data_map = {}
+        for p in positions:
+            tk = (p.ticker or "").upper()
+            if not tk:
+                continue
+            asset = session.get(Asset, tk)
+            sleeve = cm.classify_sleeve(tk, asset.asset_class if asset else None)
+            holdings.append({"ticker": tk, "weight": float(p.weight or 0.0) / total_w, "sleeve": sleeve})
+            if tk not in data_map:
+                try:
+                    rows = get_price_series_cached(tk, period="2y", force_refresh=False, session=session)
+                    data_map[tk] = rows or []
+                except Exception as e:  # noqa: BLE001
+                    logger.error("  regime: fetch failed for %s: %s", tk, e)
+                    data_map[tk] = []
+
+        res = cm.compute_portfolio_regime(holdings, data_map)
+
+        existing = session.exec(
+            select(PortfolioRegimeSnapshot)
+            .where(PortfolioRegimeSnapshot.portfolio_id == pf.id)
+            .where(PortfolioRegimeSnapshot.short_window == 60)
+            .where(PortfolioRegimeSnapshot.baseline_window == cm.BASELINE_WINDOW)
+        ).first()
+        row = existing or PortfolioRegimeSnapshot(
+            portfolio_id=pf.id, short_window=60, baseline_window=cm.BASELINE_WINDOW, created_at=now,
+        )
+        row.status = res["status"]
+        row.pair = res.get("pair", "equity_vs_bond")
+        row.method = res.get("method", cm.RETURN_METHOD)
+        row.data_source = data_source
+        row.sleeve_weights_json = json.dumps(res.get("sleeve_weights", {}))
+        row.reason = res.get("reason", "")
+        row.updated_at = now
+        if res["status"] == "ok":
+            row.short_corr = res["short_corr"]
+            row.baseline_corr = res["baseline_corr"] if res["baseline_corr"] is not None else 0.0
+            row.delta = res["delta"] if res["delta"] is not None else 0.0
+            row.n_obs = res["n_obs"]
+            row.as_of = datetime.strptime(res["as_of"], "%Y-%m-%d")
+            row.series_json = json.dumps(res["series"])
+        else:
+            row.short_corr = 0.0
+            row.baseline_corr = 0.0
+            row.delta = 0.0
+            row.n_obs = 0
+            row.as_of = None
+            row.series_json = "[]"
+        if existing is None:
+            session.add(row)
+        written += 1
+        logger.info("  regime pf=%s: status=%s short=%.3f base=%.3f n=%d",
+                    pf.id, row.status, row.short_corr, row.baseline_corr, row.n_obs)
+    session.commit()
+    return written
+
+
 def run(force_refresh: bool = True) -> int:
     init_db()
     # Honest data-source label = the vendor actually resolved at compute time.
@@ -119,7 +195,13 @@ def run(force_refresh: bool = True) -> int:
                 )
         session.commit()
 
-    logger.info("correlation_batch: wrote/updated %d snapshots (source=%s)", written, data_source)
+        # ── Portfolio Regime Watch: per-portfolio equity-vs-bond realized corr ──
+        regime_written = _refresh_portfolio_regime(session, data_source)
+
+    logger.info(
+        "correlation_batch: wrote/updated %d pair snapshots + %d portfolio regime snapshots (source=%s)",
+        written, regime_written, data_source,
+    )
     return 0
 
 

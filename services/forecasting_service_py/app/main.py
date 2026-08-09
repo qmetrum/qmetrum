@@ -76,6 +76,7 @@ from app.db.models import (
     PortfolioReportDataCache,
     CorrelationSnapshot,
     EmailSignup,
+    PortfolioRegimeSnapshot,
 )
 from app.vendors import get_vendor
 
@@ -3947,6 +3948,77 @@ def quantum_systemic_risk_portfolio(
     except Exception as e:
         logger.error(f"Quantum systemic risk failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_REGIME_DISCLAIMERS = [
+    "Realized correlation of daily returns between the portfolio's equity and bond "
+    "sleeves — a measurement of what markets have done, not a forecast.",
+    "The baseline is this portfolio's own trailing 1-year realized correlation, not "
+    "an assumed or industry figure.",
+    "Uses close-to-close returns of the actual holdings (not dividend-adjusted); "
+    "sleeves below a 5% weight floor are excluded and disclosed.",
+    "No accuracy, hit rate, or track record is implied.",
+]
+
+
+@app.get("/portfolios/{portfolio_id}/regime_watch")
+def portfolio_regime_watch(
+    portfolio_id: str,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Regime Watch: realized equity-vs-bond correlation on the portfolio's real
+    holdings versus its own long-run baseline. Serves the PRECOMPUTED snapshot
+    only — no compute or vendor calls in the request path."""
+    pid = _parse_portfolio_id(portfolio_id)
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        portfolio = session.exec(
+            select(Portfolio).where(Portfolio.id == pid).where(Portfolio.user_id == user.id)
+        ).first()
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+        row = session.exec(
+            select(PortfolioRegimeSnapshot)
+            .where(PortfolioRegimeSnapshot.portfolio_id == pid)
+            .order_by(PortfolioRegimeSnapshot.updated_at.desc())
+        ).first()
+
+    if row is None:
+        return {
+            "portfolio_id": pid,
+            "status": "pending",
+            "note": "Not yet computed. Regime Watch refreshes on the daily batch.",
+            "disclaimers": _REGIME_DISCLAIMERS,
+        }
+
+    computed_at = row.updated_at
+    stale = False
+    try:
+        stale = (utcnow() - computed_at).days > 3
+    except Exception:
+        stale = False
+
+    return {
+        "portfolio_id": pid,
+        "status": row.status,               # ok | na
+        "pair": row.pair,
+        "short_window": row.short_window,
+        "baseline_window": row.baseline_window,
+        "short_corr": row.short_corr,
+        "baseline_corr": row.baseline_corr,
+        "delta": row.delta,
+        "n_obs": row.n_obs,
+        "as_of": row.as_of.strftime("%Y-%m-%d") if row.as_of else None,
+        "computed_at": computed_at.isoformat() if computed_at else None,
+        "stale": stale,
+        "method": row.method,
+        "data_source": row.data_source,
+        "sleeve_weights": json.loads(row.sleeve_weights_json or "{}"),
+        "series": json.loads(row.series_json or "[]"),
+        "reason": row.reason or None,
+        "disclaimers": _REGIME_DISCLAIMERS,
+    }
 
 
 @app.post("/portfolios/{portfolio_id}/tensor_network_risk")
