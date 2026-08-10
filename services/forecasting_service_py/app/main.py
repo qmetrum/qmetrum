@@ -2059,6 +2059,48 @@ def _evaluate_alert_rule(rule: AlertRule) -> dict:
             "reason": "Externally evaluated by Qpulse (see /qpulse/ingest)",
         }
 
+    # Regime Watch: reads the precomputed per-portfolio snapshot (no vendor call).
+    # Must precede the price lookup — the rule's ticker is a portfolio sentinel
+    # (__PORT_{id}__) with no price series, so a fetch would both burn a call and
+    # mis-evaluate. Fires on the rising edge when the short-window equity-vs-bond
+    # correlation crosses above the portfolio's OWN baseline + margin.
+    if alert_type == "regime_watch":
+        pid = extra.get("portfolio_id")
+        margin = float(extra.get("margin", 0.15) or 0.15)
+        row = None
+        if pid is not None:
+            with Session(engine) as _s:
+                row = _s.exec(
+                    select(PortfolioRegimeSnapshot)
+                    .where(PortfolioRegimeSnapshot.portfolio_id == int(pid))
+                    .order_by(PortfolioRegimeSnapshot.updated_at.desc())
+                ).first()
+        if row is None or row.status != "ok":
+            return {
+                "alert_id": rule.id,
+                "ticker": ticker,
+                "alert_type": alert_type,
+                "triggered": False,
+                "detector_source": "regime_watch",
+                "reason": ("No regime measurement available yet" if row is None
+                           else "Not enough data to measure diversification"),
+            }
+        triggered = float(row.short_corr) >= (float(row.baseline_corr) + margin)
+        return {
+            "alert_id": rule.id,
+            "ticker": ticker,
+            "alert_type": alert_type,
+            "triggered": bool(triggered),
+            "detector_source": "regime_watch",
+            "portfolio_id": int(pid),
+            "value": float(row.short_corr),
+            "baseline": float(row.baseline_corr),
+            "margin": float(margin),
+            "delta": float(row.delta),
+            "n_obs": int(row.n_obs),
+            "as_of": row.as_of.strftime("%Y-%m-%d") if row.as_of else None,
+        }
+
     prices = get_price_series_cached(ticker, period="1y")
     if not prices:
         return {
@@ -4019,6 +4061,77 @@ def portfolio_regime_watch(
         "reason": row.reason or None,
         "disclaimers": _REGIME_DISCLAIMERS,
     }
+
+
+class RegimeWatchAlertRequest(BaseModel):
+    margin: float = 0.15
+    name: Optional[str] = None
+
+
+def _regime_extra(pid: int, margin: float) -> dict:
+    return {
+        "portfolio_id": pid,
+        "margin": margin,
+        "metric": "equity_bond_corr",
+        "window": 60,
+        "baseline_window": 252,
+    }
+
+
+@app.post("/portfolios/{portfolio_id}/regime_watch/alert")
+def enable_portfolio_regime_alert(
+    portfolio_id: str,
+    payload: Optional[RegimeWatchAlertRequest] = None,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Create (idempotent) a Regime Watch alert on a portfolio. Fires on the
+    rising edge when the short-window equity-vs-bond correlation crosses above the
+    portfolio's own baseline + margin, inheriting the standard alert edge-trigger,
+    cooldown, and market-hours gating. Uses a portfolio sentinel ticker so it can
+    never collide with a real-ticker rule's cooldown."""
+    pid = _parse_portfolio_id(portfolio_id)
+    margin = float((payload.margin if payload else 0.15) or 0.15)
+    sentinel = f"__PORT_{pid}__"
+    now = utcnow()
+    with Session(engine) as session:
+        user = _require_user(session, user_id, x_user_id)
+        portfolio = session.exec(
+            select(Portfolio).where(Portfolio.id == pid).where(Portfolio.user_id == user.id)
+        ).first()
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+        existing = session.exec(
+            select(AlertRule)
+            .where(AlertRule.user_id == user.id)
+            .where(AlertRule.ticker == sentinel)
+            .where(AlertRule.alert_type == "regime_watch")
+        ).first()
+        if existing:
+            existing.is_active = True
+            existing.extra_config = _regime_extra(pid, margin)
+            existing.updated_at = now
+            session.add(existing)
+            session.commit()
+            session.refresh(existing)
+            return existing
+        rule = AlertRule(
+            user_id=user.id,
+            name=(payload.name if payload and payload.name else f"Regime Watch - {portfolio.name}"),
+            ticker=sentinel,
+            alert_type="regime_watch",
+            direction="above",
+            threshold_value=0.0,
+            lookback_days=60,
+            is_active=True,
+            extra_config=_regime_extra(pid, margin),
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(rule)
+        session.commit()
+        session.refresh(rule)
+        return rule
 
 
 @app.post("/portfolios/{portfolio_id}/tensor_network_risk")

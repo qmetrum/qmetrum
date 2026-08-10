@@ -100,6 +100,30 @@ def _qpulse_event_line(ts: str, payload: dict[str, Any]) -> str:
     return line
 
 
+def _regime_event_line(ts: str, payload: dict[str, Any]) -> str:
+    """Describe a Regime Watch measurement honestly: realized equity-vs-bond
+    correlation now vs the portfolio's own baseline. A MEASUREMENT, never a
+    prediction — no accuracy, probability, or track record is implied."""
+    val = _fmt_num(payload.get("value"))
+    base = _fmt_num(payload.get("baseline"))
+    delta = _fmt_num(payload.get("delta"))
+    as_of = payload.get("as_of")
+    triggered = bool(payload.get("triggered"))
+    verb = "has risen above" if triggered else "is at or below"
+    line = (
+        f"Regime measurement ({ts}): the portfolio's realized equity-vs-bond return "
+        f"correlation is {val} over the short window, versus its OWN long-run baseline "
+        f"of {base} (change {delta}); it {verb} that baseline"
+    )
+    line += f", as of {as_of}." if as_of else "."
+    line += (
+        " This is a realized MEASUREMENT of how the equity and bond sleeves have "
+        "co-moved — it is NOT a forecast, and it implies no probability of a drawdown, "
+        "no accuracy, and no track record."
+    )
+    return line
+
+
 def build_prompt(
     rule_name: str,
     ticker: str,
@@ -109,13 +133,17 @@ def build_prompt(
     latest_event: Optional[dict[str, Any]],
     exposures: list[dict[str, Any]],
 ) -> str:
+    payload = (latest_event or {}).get("payload") or {}
+    detector = str(payload.get("detector_source", "")).lower()
+
     event_line = "No triggered events yet — this alert has not fired."
     if latest_event:
         ts = latest_event.get("evaluated_at") or ""
         triggered = "triggered" if latest_event.get("triggered") else "not triggered"
-        payload = latest_event.get("payload") or {}
-        if str(payload.get("detector_source", "")).lower() == "qpulse":
+        if detector == "qpulse":
             event_line = _qpulse_event_line(ts, payload)
+        elif detector == "regime_watch":
+            event_line = _regime_event_line(ts, payload)
         else:
             payload_bits = []
             for key in ("observed_value", "current_price", "latest_price", "value"):
@@ -128,6 +156,27 @@ def build_prompt(
                 f"{(' ' + payload_line) if payload_line else ''}"
             )
 
+    # Regime Watch is a whole-portfolio diversification measure, not a single
+    # ticker, and has no fixed price threshold — frame it that way (no fabricated
+    # ticker exposure, no fabricated "threshold 0.00").
+    if detector == "regime_watch":
+        rule_line = (
+            "Rule: diversification regime watch — measures the realized equity-vs-bond "
+            "correlation on the portfolio's real holdings against the portfolio's OWN "
+            "long-run baseline; fires when the short-window correlation rises materially "
+            "above that baseline (no fixed price threshold)"
+        )
+        subject = ("Subject: this portfolio's equity/bond diversification "
+                   "(a whole-book measure, not a single ticker).")
+        return (
+            f"{SYSTEM_PROMPT}\n\n"
+            f"Alert: {rule_name}\n"
+            f"{subject}\n"
+            f"{rule_line}\n"
+            f"{event_line}\n\n"
+            "Write the explanation now, 2-3 sentences, no bullets."
+        )
+
     if exposures:
         exposure_lines = "\n".join(
             f"- {e['portfolio_name']}: weight {_fmt_pct(e.get('weight'))}"
@@ -139,8 +188,7 @@ def build_prompt(
     # A Qpulse rule has no direction/threshold — it is fed by an external
     # streaming detector, so quoting "direction above, threshold 0.00" would be
     # a fabricated condition.
-    is_qpulse = str(((latest_event or {}).get("payload") or {})
-                    .get("detector_source", "")).lower() == "qpulse"
+    is_qpulse = detector == "qpulse"
     rule_line = (
         "Rule: streaming anomaly detection (Qpulse); no fixed threshold — the "
         "detector fires on statistical deviation from a rolling baseline"
