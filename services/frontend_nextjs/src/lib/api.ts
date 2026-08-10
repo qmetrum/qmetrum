@@ -1171,3 +1171,35 @@ export const correlationApi = {
     return r.json();
   },
 };
+
+// ── Authenticated Regime Watch (Qpulse regime signal on a real portfolio) ──────
+// Uses the authed `api` axios instance (X-User-Id / bearer), unlike the public
+// correlationApi above.
+export type RegimeWatchResponse = {
+  portfolio_id: number;
+  status: "ok" | "na" | "pending";
+  pair?: string;
+  short_window?: number;
+  baseline_window?: number;
+  short_corr?: number;
+  baseline_corr?: number;
+  delta?: number;
+  n_obs?: number;
+  as_of?: string | null;
+  computed_at?: string | null;
+  stale?: boolean;
+  method?: string;
+  data_source?: string;
+  sleeve_weights?: Record<string, number>;
+  series?: CorrelationSeriesPoint[];
+  reason?: string | null;
+  note?: string;
+  disclaimers: string[];
+};
+
+export const regimeApi = {
+  get: async (portfolioId: string | number): Promise<RegimeWatchResponse> =>
+    (await api.get<RegimeWatchResponse>(`/portfolios/${portfolioId}/regime_watch`)).data,
+  enableAlert: async (portfolioId: string | number, margin = 0.15) =>
+    (await api.post(`/portfolios/${portfolioId}/regime_watch/alert`, { margin })).data,
+};

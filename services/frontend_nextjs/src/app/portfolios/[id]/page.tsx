@@ -15,6 +15,7 @@ import { CreateAlertDialog } from "@/components/shared/CreateAlertDialog";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
 import { PortfolioCommentaryCard } from "@/components/shared/PortfolioCommentaryCard";
 import { VarBacktestCard } from "@/components/shared/VarBacktestCard";
+import { RegimeWatchCard } from "@/components/shared/RegimeWatchCard";
 import { DrawdownAllocationCard } from "@/components/shared/DrawdownAllocationCard";
 import { ClientQADrawer } from "@/components/shared/ClientQADrawer";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
@@ -910,6 +911,9 @@ export default function PortfolioDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Regime Watch: realized equity-vs-bond correlation on the real book vs its own baseline */}
+      <RegimeWatchCard portfolioId={id} />
 
       {/* VaR 95 backtest (Kupiec / Christoffersen coverage) */}
       <VarBacktestCard portfolioId={id} />
