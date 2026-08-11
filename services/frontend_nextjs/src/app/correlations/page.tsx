@@ -6,9 +6,11 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import {
   correlationApi,
   type CorrelationMonitorResponse,
+  type CorrelationReplayResponse,
   type CorrelationPair,
 } from "@/lib/api";
 import { CorrelationChart } from "@/components/charts/CorrelationChart";
+import { ReplayChart } from "@/components/charts/ReplayChart";
 
 // Per-pair caveat where the sign needs context (high-yield credit is equity-like,
 // so a positive reading is expected, not a diversification failure).
@@ -178,6 +180,9 @@ export default function CorrelationsPage() {
           </div>
         )}
 
+        {/* Historical replay — the credibility artifact */}
+        <ReplaySection />
+
         {/* Email capture */}
         <SignupCard />
 
@@ -240,6 +245,55 @@ function PairCard({ pair, activeWin }: { pair: CorrelationPair; activeWin: numbe
       </div>
       {note && <p className="mt-2 text-[11px] italic text-[var(--text-muted)]">{note}</p>}
     </div>
+  );
+}
+
+function ReplaySection() {
+  const { data } = useQuery<CorrelationReplayResponse>({
+    queryKey: ["public-correlation-replay"],
+    queryFn: correlationApi.replay,
+    staleTime: 60 * 60_000,
+    refetchOnWindowFocus: false,
+  });
+  if (!data || data.status !== "ok" || !data.points?.length) return null;
+
+  return (
+    <section className="mt-10 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)] p-6 shadow-[var(--card-shadow)]">
+      <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--coral)]">
+        Has this ever mattered?
+      </p>
+      <h2 className="text-xl font-bold text-[var(--navy)]">When diversification stopped working</h2>
+      <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">
+        Two decades of the realized stock–bond correlation (green), against the drawdown of a
+        60/40 portfolio (orange). Notice where the green line climbs above zero — stocks and bonds
+        falling together — right as the 60/40 takes its deepest hits. This is realized history, not
+        a forecast.
+      </p>
+
+      <div className="mt-5">
+        <ReplayChart points={data.points} height={300} />
+      </div>
+
+      <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {(data.episodes ?? []).map((e) => (
+          <div key={e.name} className="rounded-lg border border-[var(--card-border)] bg-[var(--content-bg)] p-4">
+            <p className="text-sm font-semibold text-[var(--navy)]">{e.name}</p>
+            <p className="mt-2 text-2xl font-bold tabular-nums" style={{ color: (e.corr ?? 0) > 0 ? CORAL : TEAL }}>
+              {e.corr == null ? "—" : `${e.corr >= 0 ? "+" : ""}${e.corr.toFixed(2)}`}
+            </p>
+            <p className="text-[11px] text-[var(--text-muted)]">realized stock–bond correlation</p>
+            <p className="mt-2 text-sm text-[var(--text-secondary)]">
+              60/40 fell <span className="font-semibold text-[var(--coral)]">{e.blend_drawdown_pct.toFixed(0)}%</span>
+            </p>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-4 text-[11px] leading-relaxed text-[var(--text-muted)]">
+        {data.start} to {data.as_of} · {data.window}-day rolling window · source {data.data_source ?? "—"}.
+        The bond side is supposed to cushion equity drawdowns; a positive correlation is exactly when it cushions least.
+      </p>
+    </section>
   );
 }
 

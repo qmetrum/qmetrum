@@ -1167,12 +1167,42 @@ export type CorrelationMonitorResponse = {
   note?: string;
 };
 
+export type ReplayPoint = { date: string; corr: number; dd: number };
+export type ReplayEpisode = {
+  name: string;
+  start: string;
+  end: string;
+  corr: number | null;
+  blend_drawdown_pct: number;
+  blend_return_pct: number;
+  n_obs: number;
+};
+export type CorrelationReplayResponse = {
+  status: "ok" | "pending";
+  data_source?: string | null;
+  pair?: string;
+  window?: number;
+  as_of?: string;
+  start?: string;
+  points?: ReplayPoint[];
+  episodes?: ReplayEpisode[];
+  disclaimers: string[];
+  note?: string;
+};
+
 export const correlationApi = {
   get: async (): Promise<CorrelationMonitorResponse> => {
     const r = await fetch(`${API_BASE_URL}/public/correlations`, {
       headers: { Accept: "application/json" },
     });
     if (!r.ok) throw new Error(`Failed to load correlations (${r.status})`);
+    return r.json();
+  },
+  replay: async (): Promise<CorrelationReplayResponse> => {
+    const r = await fetch(`${API_BASE_URL}/public/correlation-replay`, {
+      headers: { Accept: "application/json" },
+    });
+    if (!r.ok) throw new Error(`Failed to load replay (${r.status})`);
     return r.json();
   },
   signup: async (email: string): Promise<{ status: string }> => {
