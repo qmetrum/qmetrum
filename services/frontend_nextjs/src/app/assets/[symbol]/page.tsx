@@ -23,6 +23,7 @@ import { RegimeBadge } from "@/components/shared/RegimeBadge";
 import { CreateAlertDialog } from "@/components/shared/CreateAlertDialog";
 import { AlertRulesList } from "@/components/shared/AlertRulesList";
 import { NewsSynthesisCard } from "@/components/shared/NewsSynthesisCard";
+import { QLensBriefCard } from "@/components/shared/QLensBriefCard";
 import { DownloadCsvButton } from "@/components/shared/DownloadCsvButton";
 import type { CsvCell } from "@/lib/csv";
 import { ForecastChart } from "@/components/charts/ForecastChart";
@@ -384,6 +385,8 @@ export default function AssetDetailPage() {
               <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{description}</p>
             </div>
           )}
+
+          <QLensBriefCard ticker={ticker} />
 
           <AlertRulesList tickers={[ticker]} title={`Alerts for ${ticker}`} />
         </div>

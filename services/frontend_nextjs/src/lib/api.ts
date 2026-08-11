@@ -972,6 +972,29 @@ export const agentsApi = {
     (await api.post<VarBacktestExplainResponse>(
       `/agents/var-backtest-explain/${portfolioId}`, {}, { timeout: HEAVY_TIMEOUT_MS },
     )).data,
+
+  qlensBrief: async (ticker: string, context?: string) =>
+    (await api.post<QLensBriefResponse>(
+      `/agents/qlens/${encodeURIComponent(ticker)}`,
+      { context: context ?? null },
+      { timeout: HEAVY_TIMEOUT_MS },
+    )).data,
+};
+
+export type QLensFact = { idx: number; source: string; statement: string };
+export type QLensBriefResponse = {
+  ticker: string;
+  stance: "Buy" | "Hold" | "Sell";
+  conviction: "low" | "medium" | "high";
+  bull: string[];
+  bear: string[];
+  key_risks: string[];
+  what_would_change_my_mind: string[];
+  rationale: string;
+  facts: QLensFact[];
+  disclaimer: string;
+  cached: boolean;
+  latency_ms: number;
 };
 
 export type VarBacktestExplainResponse = {
