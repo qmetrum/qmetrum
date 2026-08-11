@@ -18,6 +18,7 @@ from app.agents import (
     alert_explainer,
     client_qa,
     var_backtest_explainer,
+    qlens_brief,
 )
 from app.agents.disclaimer import DISCLAIMER
 
@@ -541,6 +542,55 @@ def news_synthesize_endpoint(ticker: str, payload: NewsSynthesizeRequest):
             "newest_timestamp": max(timestamps) if timestamps else None,
             "publishers": sorted({str(it.get("publisher") or "unknown") for it in items}),
         },
+    )
+
+
+class QLensBriefRequest(BaseModel):
+    context: Optional[str] = Field(default=None, description="Optional freeform context to weigh")
+
+
+class QLensFactOut(BaseModel):
+    idx: int
+    source: str
+    statement: str
+
+
+class QLensBriefResponse(BaseModel):
+    ticker: str
+    stance: str
+    conviction: str
+    bull: list[str]
+    bear: list[str]
+    key_risks: list[str]
+    what_would_change_my_mind: list[str]
+    rationale: str
+    facts: list[QLensFactOut]
+    disclaimer: str
+    cached: bool
+    latency_ms: int
+
+
+@agents_router.post("/qlens/{ticker}", response_model=QLensBriefResponse)
+def qlens_brief_endpoint(
+    ticker: str,
+    payload: Optional[QLensBriefRequest] = None,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """On-demand decision-support "second opinion" on one holding: an honesty-gated
+    bull/bear debate over Qmetrum's own data, ending in a Buy/Hold/Sell stance."""
+    with Session(engine) as session:
+        _require_user_like(session, user_id, x_user_id)
+    try:
+        brief, result = qlens_brief.run(ticker, (payload.context if payload else None))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"qlens brief failed: {exc}")
+    return QLensBriefResponse(
+        **brief,
+        cached=result.cached,
+        latency_ms=result.latency_ms,
     )
 
 
