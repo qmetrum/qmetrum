@@ -599,6 +599,37 @@ def public_correlations():
     }
 
 
+@app.get("/public/correlation-replay")
+def public_correlation_replay():
+    """PUBLIC: the historical replay — SPY vs AGG rolling correlation and 60/40
+    drawdown across 2008/2020/2022. Realized history, not a forecast. Serves the
+    precomputed reserved snapshot row (REPLAY_SPY_AGG)."""
+    with Session(engine) as session:
+        row = session.exec(
+            select(CorrelationSnapshot).where(CorrelationSnapshot.pair_key == "REPLAY_SPY_AGG")
+        ).first()
+    if row is None:
+        return {"status": "pending", "note": "Not yet computed.",
+                "disclaimers": _CORR_DISCLAIMERS}
+    try:
+        replay = json.loads(row.series_json or "{}")
+    except Exception:
+        replay = {}
+    return {
+        "status": "ok",
+        "data_source": row.data_source or None,
+        **replay,
+        "disclaimers": [
+            "Rolling correlation of daily returns between the S&P 500 (SPY) and U.S. "
+            "Aggregate Bonds (AGG); the 60/40 line is a daily-rebalanced blend.",
+            "Every figure is realized history, not a forecast. Crisis-window statistics "
+            "are computed over the stated real date ranges.",
+            "Close-to-close returns, not dividend-adjusted. Reproducible from public "
+            "end-of-day prices.",
+        ],
+    }
+
+
 @app.post("/public/correlation-signup")
 def public_correlation_signup(body: CorrelationSignupRequest):
     """PUBLIC: capture an email for the weekly correlation note.

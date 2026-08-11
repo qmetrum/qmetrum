@@ -38,6 +38,54 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 
+def _refresh_historical_replay(session, data_source: str, force_refresh: bool = True) -> bool:
+    """Compute the SPY-vs-AGG historical replay (rolling corr + 60/40 drawdown
+    across 2008/2020/2022) and store it in a reserved CorrelationSnapshot row
+    (pair_key REPLAY_SPY_AGG). The public PAIRS reader allow-lists to PAIRS, so
+    this row never leaks into /public/correlations; it's served by its own
+    endpoint. Fetches long history (period='max') for the two legs only."""
+    from app.db.models import CorrelationSnapshot
+
+    a, b = cm.REPLAY_PAIR
+    rows_a = get_price_series_cached(a, period="max", force_refresh=force_refresh, session=session) or []
+    rows_b = get_price_series_cached(b, period="max", force_refresh=force_refresh, session=session) or []
+    logger.info("  replay: %s=%d pts, %s=%d pts", a, len(rows_a), b, len(rows_b))
+    replay = cm.compute_historical_replay(rows_a, rows_b)
+    if replay is None:
+        logger.warning("  replay: insufficient history, skipping")
+        return False
+
+    key = f"REPLAY_{a}_{b}"
+    now = utcnow()
+    as_of_dt = datetime.strptime(replay["as_of"], "%Y-%m-%d")
+    latest_corr = replay["points"][-1]["corr"] if replay["points"] else 0.0
+    existing = session.exec(
+        select(CorrelationSnapshot)
+        .where(CorrelationSnapshot.pair_key == key)
+        .where(CorrelationSnapshot.window_days == replay["window"])
+    ).first()
+    row = existing or CorrelationSnapshot(
+        pair_key=key, window_days=replay["window"], created_at=now,
+    )
+    row.symbol_a, row.symbol_b = a, b
+    row.label = "Historical replay: stock-bond correlation vs 60/40 drawdown"
+    row.as_of = as_of_dt
+    row.corr_pearson = latest_corr
+    row.corr_spearman = 0.0
+    row.n_obs = len(replay["points"])
+    row.method = cm.RETURN_METHOD
+    row.data_source = data_source
+    row.series_json = json.dumps(replay)
+    row.updated_at = now
+    if existing is None:
+        session.add(row)
+    session.commit()
+    ep = ", ".join(f"{e['name'].split()[0]}: corr {e['corr']}, 60/40 {e['blend_drawdown_pct']}%"
+                   for e in replay["episodes"])
+    logger.info("  replay: %d pts %s..%s | %s", len(replay["points"]), replay["start"], replay["as_of"], ep)
+    return True
+
+
 def _refresh_portfolio_regime(session, data_source: str) -> int:
     """Per-portfolio Regime Watch: realized equity-vs-bond correlation on real
     holdings vs the book's own baseline. Reads CACHED prices only (no force
@@ -195,12 +243,15 @@ def run(force_refresh: bool = True) -> int:
                 )
         session.commit()
 
+        # ── Historical replay (SPY vs AGG, 2008/2020/2022) ──
+        replay_ok = _refresh_historical_replay(session, data_source, force_refresh=force_refresh)
+
         # ── Portfolio Regime Watch: per-portfolio equity-vs-bond realized corr ──
         regime_written = _refresh_portfolio_regime(session, data_source)
 
     logger.info(
-        "correlation_batch: wrote/updated %d pair snapshots + %d portfolio regime snapshots (source=%s)",
-        written, regime_written, data_source,
+        "correlation_batch: %d pair snapshots + replay=%s + %d portfolio regime snapshots (source=%s)",
+        written, replay_ok, regime_written, data_source,
     )
     return 0
 

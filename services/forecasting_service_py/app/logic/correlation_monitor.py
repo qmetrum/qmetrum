@@ -112,6 +112,81 @@ def compute_pair_window(rows_a: List[Dict], rows_b: List[Dict], window: int) -> 
     }
 
 
+# ── Historical replay: does this measurement ever matter? ─────────────────────
+# The credibility artifact. On the full history of SPY vs AGG, show the rolling
+# stock-bond correlation flipping positive right as the 60/40 blend suffered its
+# worst drawdowns (2008, 2020, 2022). Pure realized history — no forecast, fully
+# reproducible. This is the demo, not a prediction.
+
+REPLAY_PAIR = ("SPY", "AGG")
+# Named real crises with fixed date windows. Stats within each are realized facts.
+REPLAY_EPISODES = [
+    ("2008 Global Financial Crisis", "2007-10-01", "2009-03-31"),
+    ("2020 COVID crash", "2020-02-01", "2020-04-30"),
+    ("2022 rate shock", "2022-01-01", "2022-12-31"),
+]
+
+
+def _blend_drawdown(rets: pd.DataFrame, w_a: float = 0.6, w_b: float = 0.4) -> pd.Series:
+    """Daily-rebalanced w_a/w_b blend equity curve -> running drawdown (fraction)."""
+    blend = w_a * rets["a"] + w_b * rets["b"]
+    eq = (1.0 + blend).cumprod()
+    return eq / eq.cummax() - 1.0
+
+
+def compute_historical_replay(
+    rows_a: List[Dict], rows_b: List[Dict], window: int = 60, sample_every: int = 5,
+) -> Optional[Dict]:
+    """Full-history rolling correlation + 60/40 drawdown, with realized stats for
+    each named crisis window. rows_a/rows_b are long price histories (SPY, AGG)."""
+    rets = _aligned_returns(rows_a, rows_b)
+    if len(rets) < max(window, 250):
+        return None
+
+    roll = rets["a"].rolling(int(window)).corr(rets["b"])
+    dd = _blend_drawdown(rets)
+
+    # Downsample the chart series (every ~week) to keep the payload light.
+    points = []
+    for i, (idx, c) in enumerate(roll.items()):
+        if i % int(sample_every) != 0:
+            continue
+        if pd.isna(c):
+            continue
+        points.append({
+            "date": idx.strftime("%Y-%m-%d"),
+            "corr": round(float(c), 4),
+            "dd": round(float(dd.loc[idx]) * 100, 2),
+        })
+
+    episodes = []
+    for name, start, end in REPLAY_EPISODES:
+        sub = rets.loc[start:end]
+        if len(sub) < 20:
+            continue
+        corr = sub["a"].corr(sub["b"])
+        sub_dd = _blend_drawdown(sub)
+        blend_ret = float((1.0 + (0.6 * sub["a"] + 0.4 * sub["b"])).prod() - 1.0)
+        episodes.append({
+            "name": name,
+            "start": start,
+            "end": end,
+            "corr": round(float(corr), 3) if pd.notna(corr) else None,
+            "blend_drawdown_pct": round(float(sub_dd.min()) * 100, 1),
+            "blend_return_pct": round(blend_ret * 100, 1),
+            "n_obs": int(len(sub)),
+        })
+
+    return {
+        "pair": f"{REPLAY_PAIR[0]}_{REPLAY_PAIR[1]}",
+        "window": int(window),
+        "as_of": rets.index[-1].strftime("%Y-%m-%d"),
+        "start": rets.index[0].strftime("%Y-%m-%d"),
+        "points": points,
+        "episodes": episodes,
+    }
+
+
 # ── Portfolio-level Regime Watch (measurement, not prediction) ─────────────────
 # Runs the SAME compute on an advisor's real book: classify holdings into coarse
 # sleeves, build a synthetic per-sleeve price series, and measure the realized
