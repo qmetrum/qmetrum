@@ -262,12 +262,14 @@ function ReplaySection() {
       <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-[var(--coral)]">
         Has this ever mattered?
       </p>
-      <h2 className="text-xl font-bold text-[var(--navy)]">When diversification stopped working</h2>
+      <h2 className="text-xl font-bold text-[var(--navy)]">When diversification held — and when it didn&apos;t</h2>
       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">
         Two decades of the realized stock–bond correlation (green), against the drawdown of a
-        60/40 portfolio (orange). Notice where the green line climbs above zero — stocks and bonds
-        falling together — right as the 60/40 takes its deepest hits. This is realized history, not
-        a forecast.
+        60/40 portfolio (orange). A big drawdown isn&apos;t always a diversification failure: in
+        2008 bonds still cushioned the crash (correlation near zero) even as the 60/40 fell with
+        equities. But in 2022, stocks and bonds fell <em>together</em> — the correlation climbed
+        and the bond side stopped protecting. This monitor measures that specific regime. Realized
+        history, not a forecast.
       </p>
 
       <div className="mt-5">
@@ -275,26 +277,42 @@ function ReplaySection() {
       </div>
 
       <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        {(data.episodes ?? []).map((e) => (
-          <div key={e.name} className="rounded-lg border border-[var(--card-border)] bg-[var(--content-bg)] p-4">
-            <p className="text-sm font-semibold text-[var(--navy)]">{e.name}</p>
-            <p className="mt-2 text-2xl font-bold tabular-nums" style={{ color: (e.corr ?? 0) > 0 ? CORAL : TEAL }}>
-              {e.corr == null ? "—" : `${e.corr >= 0 ? "+" : ""}${e.corr.toFixed(2)}`}
-            </p>
-            <p className="text-[11px] text-[var(--text-muted)]">realized stock–bond correlation</p>
-            <p className="mt-2 text-sm text-[var(--text-secondary)]">
-              60/40 fell <span className="font-semibold text-[var(--coral)]">{e.blend_drawdown_pct.toFixed(0)}%</span>
-            </p>
-          </div>
-        ))}
+        {(data.episodes ?? []).map((e) => {
+          const read = episodeRead(e.corr);
+          return (
+            <div key={e.name} className="rounded-lg border border-[var(--card-border)] bg-[var(--content-bg)] p-4">
+              <p className="text-sm font-semibold text-[var(--navy)]">{e.name}</p>
+              <p className="mt-2 text-2xl font-bold tabular-nums" style={{ color: read.color }}>
+                {e.corr == null ? "—" : `${e.corr >= 0 ? "+" : ""}${e.corr.toFixed(2)}`}
+              </p>
+              <p className="text-[11px] text-[var(--text-muted)]">realized stock–bond correlation</p>
+              <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                60/40 fell <span className="font-semibold text-[var(--coral)]">{e.blend_drawdown_pct.toFixed(0)}%</span>
+              </p>
+              <p className="mt-2 text-xs leading-snug" style={{ color: read.color }}>{read.text}</p>
+            </div>
+          );
+        })}
       </div>
 
       <p className="mt-4 text-[11px] leading-relaxed text-[var(--text-muted)]">
         {data.start} to {data.as_of} · {data.window}-day rolling window · source {data.data_source ?? "—"}.
-        The bond side is supposed to cushion equity drawdowns; a positive correlation is exactly when it cushions least.
+        The bond side is meant to cushion equity drawdowns; a positive correlation is exactly when it cushions least.
       </p>
     </section>
   );
+}
+
+// Honest, data-driven read of a crisis window: a low correlation means bonds
+// still diversified (the drawdown came from the equity crash), a high one means
+// diversification itself broke.
+function episodeRead(corr: number | null): { text: string; color: string } {
+  if (corr == null) return { text: "", color: TEAL };
+  if (corr >= 0.25)
+    return { text: "Stocks and bonds fell together — diversification stopped working.", color: CORAL };
+  if (corr >= 0.1)
+    return { text: "Bonds cushioned less than usual — partial diversification.", color: AMBER };
+  return { text: "Bonds still diversified; the drop was the equity crash, not a correlation break.", color: TEAL };
 }
 
 function SignupCard() {
