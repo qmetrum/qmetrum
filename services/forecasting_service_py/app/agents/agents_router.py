@@ -19,6 +19,7 @@ from app.agents import (
     client_qa,
     var_backtest_explainer,
     qlens_brief,
+    client_letter,
 )
 from app.agents.disclaimer import DISCLAIMER
 
@@ -543,6 +544,53 @@ def news_synthesize_endpoint(ticker: str, payload: NewsSynthesizeRequest):
             "publishers": sorted({str(it.get("publisher") or "unknown") for it in items}),
         },
     )
+
+
+class ClientLetterResponse(BaseModel):
+    portfolio_id: int
+    greeting: str
+    performance_paragraph: str
+    diversification_paragraph: str
+    closing_paragraph: str
+    facts: dict[str, Any]
+    disclaimer: str
+    is_draft: bool
+    cached: bool
+    latency_ms: int
+
+
+@agents_router.post("/client-letter/{portfolio_id}", response_model=ClientLetterResponse)
+def client_letter_endpoint(
+    portfolio_id: int,
+    user_id: Optional[int] = None,
+    x_user_id: Optional[int] = Header(default=None, alias="X-User-Id"),
+):
+    """Draft a warm, client-ready quarterly letter grounded in the portfolio's REAL
+    numbers (performance + Regime Watch). Always a draft for advisor review."""
+    with Session(engine) as session:
+        user = _require_user_like(session, user_id, x_user_id)
+        portfolio = session.exec(
+            select(Portfolio).where(Portfolio.id == portfolio_id).where(Portfolio.user_id == user.id)
+        ).first()
+        if not portfolio:
+            raise HTTPException(status_code=404, detail="Portfolio not found")
+        positions = session.exec(
+            select(Position).where(Position.portfolio_id == portfolio_id)
+        ).all()
+        holdings = [{"ticker": p.ticker, "weight": p.weight} for p in positions]
+        if not holdings:
+            raise HTTPException(status_code=400, detail="Portfolio has no holdings")
+        try:
+            letter, result = client_letter.run(
+                portfolio_id=portfolio_id, holdings=holdings, session=session
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"client letter failed: {exc}")
+    return ClientLetterResponse(**letter, cached=result.cached, latency_ms=result.latency_ms)
 
 
 class QLensBriefRequest(BaseModel):
