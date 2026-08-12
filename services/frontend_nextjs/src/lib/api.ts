@@ -979,6 +979,28 @@ export const agentsApi = {
       { context: context ?? null },
       { timeout: HEAVY_TIMEOUT_MS },
     )).data,
+
+  clientLetter: async (portfolioId: number | string) =>
+    (await api.post<ClientLetterResponse>(
+      `/agents/client-letter/${portfolioId}`, {}, { timeout: HEAVY_TIMEOUT_MS },
+    )).data,
+};
+
+export type ClientLetterResponse = {
+  portfolio_id: number;
+  greeting: string;
+  performance_paragraph: string;
+  diversification_paragraph: string;
+  closing_paragraph: string;
+  facts: {
+    portfolio?: { quarter_return_pct: number; year_return_pct: number; ann_vol_pct: number; max_drawdown_pct: number; n_obs: number };
+    all_stock?: { quarter_return_pct: number; ann_vol_pct: number };
+    regime?: { short_corr: number; baseline_corr: number; delta: number; as_of: string | null };
+  };
+  disclaimer: string;
+  is_draft: boolean;
+  cached: boolean;
+  latency_ms: number;
 };
 
 export type QLensFact = { idx: number; source: string; statement: string };
