@@ -1,14 +1,18 @@
 name: Deploy backend
 
-# Triggered on:
-#   - any push to main/master that touches the backend or this workflow,
-#   - manual dispatch from the Actions tab (handy for redeploying without a code change).
+# DORMANT since 2026-10-01: the AWS footprint this deploys to was torn down for cost
+# reasons (~$131/mo). The ECR repo, ECS cluster/service and ALB no longer exist, so the
+# push trigger is disabled — otherwise every backend commit fails this workflow.
+# Left in place (dispatch-only) because it's a working pipeline worth keeping for a
+# future redeploy. To revive: recreate ECR + ECS cluster/service, re-check the
+# AWS_REGION / ECR_REPOSITORY / ECS_CLUSTER / ECS_SERVICE repo secrets, then restore
+# the `push:` block below.
 on:
-  push:
-    branches: [main, master]
-    paths:
-      - 'services/forecasting_service_py/**'
-      - '.github/workflows/deploy-backend.yml'
+  # push:
+  #   branches: [main, master]
+  #   paths:
+  #     - 'services/forecasting_service_py/**'
+  #     - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
 # OIDC needs id-token: write. We don't push to the repo from the workflow,
